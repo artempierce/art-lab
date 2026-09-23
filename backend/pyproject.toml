@@ -5,11 +5,18 @@ description = "Art Lab backend: FastAPI + LangGraph"
 requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.22.1",
+    "beautifulsoup4>=4.15.0",
+    "chromadb>=1.5.9",
     "fastapi>=0.141.1",
+    "fastembed>=0.8.1",
+    "httpx>=0.28.1",
     "langchain-anthropic>=1.7.4",
+    "langchain-chroma>=1.1.0",
+    "langchain-text-splitters>=1.1.2",
     "langgraph>=1.2.12",
     "langgraph-checkpoint-sqlite>=3.1.1",
     "python-dotenv>=1.2.3",
+    "pyyaml>=6.0.3",
     "uvicorn[standard]>=0.53.0",
 ]
 

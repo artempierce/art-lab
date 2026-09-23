@@ -92,6 +92,23 @@ class GuardResult:
     reason: str
 
 
+def find_injection(text: str, skip: frozenset[str] = frozenset()) -> str | None:
+    """Return the name of the first injection rule that matches `text`, or None if none match.
+
+    Used in two places:
+      - on every message you send (`check_input`, below), with every rule
+      - on every chunk of every document added to the knowledge base (rag/ingest.py), because a web
+        page or file can carry an injection just as easily as a chat message can
+
+    Args:
+        skip: rule names not to run. Ingest skips "fake-tags" (see rag/ingest.py for why).
+    """
+    for rule, pattern in INJECTION_RULES.items():
+        if rule not in skip and pattern.search(text):
+            return rule
+    return None
+
+
 def check_input(text: str, spent_usd: float) -> GuardResult:
     """Run the three input checks on one message and return the verdict.
 
@@ -108,9 +125,8 @@ def check_input(text: str, spent_usd: float) -> GuardResult:
         return GuardResult("size", f"message is {len(text)} chars; the limit is {MAX_INPUT_CHARS}")
 
     # 2. Injection: try each rule in order; the first match names the block.
-    for rule, pattern in INJECTION_RULES.items():
-        if pattern.search(text):
-            return GuardResult(rule, "looks like a prompt-injection attempt")
+    if rule := find_injection(text):
+        return GuardResult(rule, "looks like a prompt-injection attempt")
 
     # 3. Budget: once a chat has spent its allowance, every further message is refused.
     #    (The message that crosses the line still runs. The check is "already spent", because
