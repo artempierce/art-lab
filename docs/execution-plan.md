@@ -4,7 +4,7 @@
 model does each one — so development costs fewer tokens without lowering quality.
 **What to build and in what order** stays in the design book (`docs/design.html`); this plan follows it.
 
-Status: draft, 2026-09-23 · nothing here starts until Sol approves (see "Decisions needed" at the end).
+Status: **approved** 2026-09-23 (see Decisions at the end).
 
 ---
 
@@ -190,10 +190,14 @@ files twice, and not carrying one giant conversation.
 
 ---
 
-## 9. Decisions needed before Wave 0
+## 9. Decisions (Sol, 2026-09-23)
 
-1. Approve this plan (or change the model routing).
-2. W0.2: classifier policy — reduce privileges (recommended), block, or warn.
-3. W0.1: require CI to pass before merging to `main`?
-4. W0.6: exempt `art-lab/` from the GateGuard file gate?
-5. W0.3: OK to spend < $0.01 on the real-Claude smoke test?
+| # | Question | Answer |
+|---|---|---|
+| 1 | Approve this plan? | **Yes** |
+| 2 | W0.2 classifier policy | **Reduce privileges**: a flagged message is still answered, but with no tools (no knowledge search); the trace shows the classifier score |
+| 3 | W0.1 require CI before merging to `main`? | **Yes** — branch protection requires Backend tests, Frontend lint + build, Smoke test (admins can still override) |
+| 4 | W0.6 exempt `art-lab/` from the file gate? | Explained to Sol; his call, in his own settings |
+| 5 | W0.3 real-Claude smoke test | **Not now** — Wave 0 goes ahead without it |
+
+Next: Wave 0 tasks W0.4 (split `graph.py`, Sonnet) and W0.5 (contracts, Opus), started in a fresh session.
