@@ -1,6 +1,29 @@
-"""HTTP API: stream a chat turn as server-sent events, list chats, load a chat's history.
+"""
+api.py — the HTTP API the web page talks to. Built with FastAPI.
 
-Run it:  uv run uvicorn artlab.api:app --reload --port 8000
+Endpoints:
+
+    POST /api/chat                 send one message; the reply streams back as server-sent events
+    GET  /api/threads              list all chats, newest first (the left sidebar)
+    GET  /api/threads/{thread_id}  one chat's full history (when you click a chat)
+
+How POST /api/chat streams. The response is *server-sent events* (SSE): a long-lived HTTP
+response made of small text blocks, each one looking like
+
+    event: token
+    data: {"text": "Hello"}
+    <blank line>
+
+The browser reads them one by one as they arrive (frontend/src/api.ts → streamChat). Five
+event types exist, always in this order:
+
+    start   → trace ID and chat ID                  (once)
+    trace   → one line for the trace panel          (once per graph step)
+    token   → a piece of the answer text            (many)
+    done    → tokens used, cost, duration           (once, at the end)
+    error   → what went wrong                       (instead of done, if something failed)
+
+Run the server:  cd backend && uv run uvicorn artlab.api:app --reload --port 8000
 """
 
 import json
@@ -21,31 +44,63 @@ from pydantic import BaseModel, Field
 from artlab.graph import build_graph
 from artlab.model import cost_usd, make_model
 
+# This file is backend/artlab/api.py, so the repo root is two folders up.
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# All chats live in this one SQLite file (git-ignored). Delete it to start fresh.
 DB_PATH = REPO_ROOT / "data" / "artlab.db"
 
+# Load settings (API keys, ARTLAB_FAKE_LLM, LangSmith) from the repo's .env into environment
+# variables. LangChain and LangSmith read them from there automatically.
 load_dotenv(REPO_ROOT / ".env")
 
 
 class ChatRequest(BaseModel):
+    """The JSON body of POST /api/chat. FastAPI validates it and returns 422 if it doesn't fit.
+
+    message    what you typed; must not be empty
+    thread_id  which chat it belongs to; null starts a new chat (the server makes an ID)
+    """
+
     message: str = Field(min_length=1)
     thread_id: str | None = None
 
 
 def text_of(message: BaseMessage) -> str:
-    """Message text, whether content is a plain string or a list of content blocks."""
+    """Return a message's text.
+
+    A message's `content` is either a plain string, or (for Claude's streamed chunks) a list
+    of content blocks like [{"type": "text", "text": "Hel"}]. This joins the text parts of
+    either shape into one string.
+    """
     if isinstance(message.content, str):
         return message.content
     return "".join(b.get("text", "") for b in message.content if isinstance(b, dict))
 
 
 def sse(event: str, data: dict) -> str:
+    """Format one server-sent event: an `event:` line, a `data:` line (JSON), and a blank line."""
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
 def create_app(model: BaseChatModel | None = None, checkpointer: BaseCheckpointSaver | None = None) -> FastAPI:
+    """Build the FastAPI app.
+
+    Args:
+        model:        chat model to use; None means "decide from .env" (see model.make_model)
+        checkpointer: chat storage to use; None means "open data/artlab.db"
+
+    The real server calls this with no arguments (see the last line of this file). Tests call
+    it with a fake model and in-memory storage, so they run the whole API for free.
+    """
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        """Runs once around the server's life: setup before `yield`, cleanup after.
+
+        Opens the SQLite database (unless a checkpointer was passed in), builds the graph, and
+        stores both on `app.state` for the endpoints to use. `AsyncExitStack` closes the
+        database connection cleanly when the server stops.
+        """
         async with AsyncExitStack() as stack:
             saver = checkpointer
             if saver is None:
@@ -59,31 +114,52 @@ def create_app(model: BaseChatModel | None = None, checkpointer: BaseCheckpointS
 
     @app.post("/api/chat")
     async def chat(req: ChatRequest):
+        """Run the graph on one message and stream everything that happens back to the browser.
+
+        Returns immediately with a streaming response; the `events()` generator below then
+        produces the SSE events one at a time while the graph runs.
+        """
         graph = app.state.graph
+
+        # Two IDs per request:
+        #   trace_id  identifies this one run. It's shown in the trace panel and is also the
+        #             LangSmith run ID, so you can search LangSmith for exactly this message.
+        #   thread_id identifies the chat. The checkpointer loads and saves history under it.
         trace_id = str(uuid.uuid4())
         thread_id = req.thread_id or str(uuid.uuid4())
-        # run_id makes the LangSmith trace ID equal to the one the trace panel shows.
         config = {"configurable": {"thread_id": thread_id}, "run_id": trace_id, "run_name": "art-lab chat"}
 
         async def events():
+            """Yield the SSE events for this run: start, then trace/token as they happen, then done or error."""
             yield sse("start", {"trace_id": trace_id, "thread_id": thread_id})
             started = time.perf_counter()
             tokens_in = tokens_out = 0
+
             try:
+                # Run the graph with two stream modes at once. Each item is (mode, chunk):
+                #   "custom"   → a dict a node wrote with get_stream_writer()  → forward as `trace`
+                #   "messages" → (message piece, metadata) as the model writes → forward as `token`
+                # The checkpointer loads this chat's earlier messages first, so we only send the new one.
                 async for mode, chunk in graph.astream(
                     {"messages": [HumanMessage(req.message)]}, config, stream_mode=["messages", "custom"]
                 ):
                     if mode == "custom":
+                        # Keep a running token total for the `done` summary.
                         tokens_in += chunk.get("input_tokens", 0)
                         tokens_out += chunk.get("output_tokens", 0)
                         yield sse("trace", chunk)
                     else:
                         message, _meta = chunk
+                        # Forward only assistant text: streamed pieces ("AIMessageChunk") and whole
+                        # replies a node added directly ("ai", e.g. the guard's refusal).
                         if message.type in ("ai", "AIMessageChunk") and (text := text_of(message)):
                             yield sse("token", {"text": text})
             except Exception as exc:
+                # Anything that goes wrong (missing API key, network error, …) becomes an `error`
+                # event the page can show, instead of a silently broken stream.
                 yield sse("error", {"message": f"{type(exc).__name__}: {exc}"})
                 return
+
             yield sse("done", {
                 "input_tokens": tokens_in,
                 "output_tokens": tokens_out,
@@ -91,19 +167,27 @@ def create_app(model: BaseChatModel | None = None, checkpointer: BaseCheckpointS
                 "ms": round((time.perf_counter() - started) * 1000),
             })
 
-        return StreamingResponse(
-            events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"}
-        )
+        # StreamingResponse sends each string `events()` yields as soon as it's yielded.
+        # "no-cache" stops proxies from buffering the stream.
+        return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     @app.get("/api/threads")
     async def list_threads():
-        # Latest checkpoint per chat. Scans every checkpoint: fine for one user, revisit with Postgres.
+        """List every chat for the sidebar: [{thread_id, title, updated_at}], newest first.
+
+        How: the checkpointer stores many snapshots per chat (one per graph step). We walk all
+        of them, keep only the newest snapshot of each chat, and use that chat's first message
+        you sent as its title (cut to 60 characters).
+
+        Walking every snapshot is fine for one user's local chats. With Postgres (later) this
+        becomes one SQL query.
+        """
         latest: dict[str, dict] = {}
         async for cp in app.state.checkpointer.alist(None):
             thread_id = cp.config["configurable"]["thread_id"]
-            ts = cp.checkpoint["ts"]
+            ts = cp.checkpoint["ts"]  # when this snapshot was saved (ISO-8601 text, so it sorts correctly)
             if thread_id in latest and latest[thread_id]["updated_at"] >= ts:
-                continue
+                continue  # already have a newer snapshot of this chat
             messages = cp.checkpoint["channel_values"].get("messages", [])
             first = next((text_of(m) for m in messages if m.type == "human"), "New chat")
             latest[thread_id] = {"thread_id": thread_id, "title": first[:60], "updated_at": ts}
@@ -111,6 +195,10 @@ def create_app(model: BaseChatModel | None = None, checkpointer: BaseCheckpointS
 
     @app.get("/api/threads/{thread_id}")
     async def get_thread(thread_id: str):
+        """Return one chat's messages as [{role: "user" | "assistant", content}], or 404 if unknown.
+
+        `aget_state` asks the checkpointer for this chat's latest saved state.
+        """
         state = await app.state.graph.aget_state({"configurable": {"thread_id": thread_id}})
         messages = state.values.get("messages", [])
         if not messages:
@@ -123,4 +211,5 @@ def create_app(model: BaseChatModel | None = None, checkpointer: BaseCheckpointS
     return app
 
 
+# The app object uvicorn serves (`uvicorn artlab.api:app`): real model and SQLite, from .env.
 app = create_app()
