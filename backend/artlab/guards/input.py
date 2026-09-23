@@ -39,20 +39,23 @@ SESSION_BUDGET_USD = 0.50
 # re.IGNORECASE makes every rule case-insensitive: "IGNORE PREVIOUS INSTRUCTIONS" matches too.
 INJECTION_RULES: dict[str, re.Pattern[str]] = {
     # Catches:  "ignore all previous instructions", "disregard your rules",
-    #           "forget the above instructions", "override the system guidelines"
+    #           "forget about previous instructions", "forget about security",
+    #           "override the system guidelines"
     # Allows:   "forget MY previous instructions about the title" (a normal edit request)
     #
     # How it reads, piece by piece:
-    #   (ignore|disregard|forget|override|bypass)    an "undo" verb
-    #   \s+(all\s+|any\s+)?(of\s+)?                   optional "all" / "any" / "of"
-    #   (your|the|these|all|any|prior|previous|...)   a word pointing at the AI's instructions
-    #                                                 ("my" is deliberately not in this list)
-    #   [\w\s]{0,25}                                  up to 25 letters/spaces in between
-    #   (instructions?|rules|prompts?|...)            the thing being undone
+    #   (ignore|disregard|forget|override|bypass)   an "undo" verb
+    #   (?:(?!\bmy\b)[^.!?\n]){0,40}?                up to 40 characters of filler ("about", "all of the"…),
+    #                                                within the same sentence, that never contain the word
+    #                                                "my" — undoing *your own* earlier request is fine
+    #   (instructions?|rules|…|security|filters)    the thing being undone
+    #
+    # History: the first version only allowed a fixed word right after the verb ("the", "all", "your"…),
+    # so "forget ABOUT previous instructions" and "forget ABOUT security" slipped through (found by Sol,
+    # 2026-09-23). One filler word was enough to beat it — the brittleness of any regex layer.
     "ignore-instructions": re.compile(
-        r"\b(ignore|disregard|forget|override|bypass)\s+(all\s+|any\s+)?(of\s+)?"
-        r"(your|the|these|all|any|prior|previous|above|earlier|system)\b[\w\s]{0,25}"
-        r"\b(instructions?|rules|prompts?|guidelines|directives)\b",
+        r"\b(ignore|disregard|forget|override|bypass)\b(?:(?!\bmy\b)[^.!?\n]){0,40}?"
+        r"\b(instructions?|rules|prompts?|guidelines|directives|guardrails|restrictions|safety|security|filters)\b",
         re.IGNORECASE,
     ),
     # Catches:  "reveal your system prompt", "print the hidden instructions"
