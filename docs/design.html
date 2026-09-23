@@ -147,7 +147,9 @@ html{scroll-behavior:smooth}
   <p class="lede">A small multi-agent web app built to learn production agent patterns — guardrails, routing, tools, human approval, memory, skills and evals — where every step runs for real and shows itself as it happens.</p>
   <div class="status">
     <span class="pill"><b>Stage:</b> building</span>
-    <span class="pill"><b>Now:</b> Phase 0 — web MVP</span>
+    <span class="pill done">Phase 0 ✓ (real-Claude check pending)</span>
+    <span class="pill done">Phase 1 ✓</span>
+    <span class="pill"><b>Next:</b> Phase 2 — supervisor</span>
     <span class="pill done">all 11 decisions resolved</span>
   </div>
 </header>
@@ -312,6 +314,7 @@ html{scroll-behavior:smooth}
         <tr><td>Scope creep — the manifest describes a production platform</td><td>Phase gates: nothing starts until the previous phase is working, visible and tested.</td></tr>
         <tr><td>LangGraph hides the mechanics you're here to learn</td><td>Every node emits a trace event; LangGraph Studio shows the graph while developing.</td></tr>
         <tr><td>API cost</td><td>Stub tools, cheapest model, hard caps, a free fake-model mode for UI work, no paid tests without asking.</td></tr>
+        <tr><td>Injection regex blocks questions <i>about</i> injection (false positive)</td><td>Accepted for a first layer and pinned in a test. Tool-output quarantine (Phase 3) and the output guard (Phase 9) cover what regex misses.</td></tr>
         <tr><td>Docs drift from code (already happened in the manifest)</td><td>This book is updated at the end of every phase.</td></tr>
       </tbody>
     </table></div>
@@ -433,7 +436,8 @@ flowchart TD
         <tr><td><code>backend/artlab/api.py</code></td><td>FastAPI app: chat stream, chat list, chat history</td><td>0</td></tr>
         <tr><td><code>backend/artlab/graph.py</code></td><td>State, nodes and LangGraph assembly</td><td>0, 2</td></tr>
         <tr><td><code>backend/artlab/model.py</code></td><td>Picks the real model or the free fake one</td><td>0</td></tr>
-        <tr><td><code>backend/artlab/guards/</code></td><td>Input and output guards, budget caps</td><td>1, 9</td></tr>
+        <tr><td><code>backend/artlab/guards/input.py</code></td><td>Input guard: size, injection rules, per-chat budget</td><td>1</td></tr>
+        <tr><td><code>backend/artlab/guards/</code></td><td>Output guard, token and time caps</td><td>9</td></tr>
         <tr><td><code>backend/artlab/agents/</code></td><td>supervisor, youtube_researcher, content_ideator, english_coach</td><td>2, 4</td></tr>
         <tr><td><code>backend/artlab/tools/</code></td><td>Registry (owns risk tiers), gateway, stubs</td><td>3, 5</td></tr>
         <tr><td><code>backend/artlab/memory/</code></td><td>Long-term store, summarizer</td><td>6</td></tr>
@@ -757,8 +761,8 @@ sequenceDiagram
   <div class="tbl"><table>
     <thead><tr><th>#</th><th>Build</th><th>Done when</th><th>Unlocks</th></tr></thead>
     <tbody>
-      <tr><td class="id">0</td><td>Web MVP: chat, streaming, trace panel, saved chats, LangSmith</td><td>Checklist above</td><td class="id">FR-1 FR-2 · S0</td></tr>
-      <tr><td class="id">1</td><td>Input guard</td><td>Blocked inputs never reach the LLM</td><td class="id">W4 · S5</td></tr>
+      <tr><td class="id">0</td><td>Web MVP: chat, streaming, trace panel, saved chats, LangSmith <span class="tag s-tool">done</span></td><td>Checklist above</td><td class="id">FR-1 FR-2 · S0</td></tr>
+      <tr><td class="id">1</td><td>Input guard: size, 4 injection rules, $0.50 per-chat budget <span class="tag s-tool">done</span></td><td>Blocked inputs never reach the LLM</td><td class="id">W4 · S5</td></tr>
       <tr><td class="id">2</td><td>Supervisor, routing, circuit breaker</td><td>Routes to stub workers; breaker test passes</td><td class="id">W6 · S7 S11</td></tr>
       <tr><td class="id">3</td><td>Tool gateway: registry-owned tiers, untrusted wrapper, stubs</td><td>Wrapper can't be broken out of; failure retried</td><td class="id">W5 W9 · S6 S10</td></tr>
       <tr><td class="id">4</td><td>Worker agents with bounded tool loops</td><td>Each worker answers using its tools</td><td class="id">W1 · S1 S4</td></tr>
