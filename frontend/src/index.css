@@ -3,9 +3,9 @@
 
 /* Same palette as docs/design.html. Stage colours: guard amber, agent blue, tool teal, memory violet, human rose. */
 @theme {
-  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-display: 'IBM Plex Sans Condensed', 'Arial Narrow', system-ui, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --color-bg: #f3f5f8;
   --color-surface: #ffffff;
