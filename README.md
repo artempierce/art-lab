@@ -103,6 +103,19 @@ cd backend && uv run pytest tests/test_retrieval_eval.py -s   # retrieval report
 cd frontend && npm run build      # type-check + production build
 ```
 
+## CI
+
+GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on **every pull request into
+`main` and every push to `main`**. Three jobs run in parallel; merge when all are green:
+
+| Job | Checks |
+|-----|--------|
+| **Backend tests** | `uv run pytest` — the full suite, fake model + local embeddings (model cached between runs) |
+| **Frontend lint + build** | `npm run lint`, then `npm run build` (type-check + production build) |
+| **Smoke test** | Starts the real API server, sends a chat message over HTTP (must stream start → guard → tokens → done), sends an injection (must be blocked before any model runs) |
+
+The whole workflow runs with `ARTLAB_FAKE_LLM=1` and LangSmith off: no API keys, no secrets, $0.
+
 ---
 
 ## Build status
@@ -146,6 +159,7 @@ Each phase ends **working, visible in the trace panel, tested, and documented**.
 
 ```
 art-lab/
+├── .github/workflows/ci.yml      # CI: backend tests, frontend build, smoke test — on every PR and push to main
 ├── CLAUDE.md                     # Rules for AI coding sessions (docs standard, cost rule, phase workflow)
 ├── README.md                     # This file
 ├── .env.example                  # Settings template → copy to .env (git-ignored)

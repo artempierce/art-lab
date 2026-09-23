@@ -38,6 +38,7 @@ A phase is done only when all of these are true:
 2. Tests pass: `cd backend && uv run pytest` and `cd frontend && npm run build`.
 3. Code is documented to the standard above; README and design book are updated.
 4. The design book is republished (same artifact URL) and the change is committed.
+5. Work goes through a pull request into `main`; CI (`.github/workflows/ci.yml`) must be green before merging.
 
 ## Commands
 
