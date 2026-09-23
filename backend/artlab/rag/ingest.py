@@ -82,7 +82,7 @@ class IngestReport:
 
 def source_name(path: Path) -> str:
     """A file's name in the knowledge base: relative to the repo when inside it (short and stable across
-    machines), otherwise its absolute path. Example: /Users/sol/art-lab/knowledge/a.md -> "knowledge/a.md"."""
+    machines), otherwise its absolute path. Example: /home/you/art-lab/knowledge/a.md -> "knowledge/a.md"."""
     path = path.resolve()
     return str(path.relative_to(REPO_ROOT)) if path.is_relative_to(REPO_ROOT) else str(path)
 
