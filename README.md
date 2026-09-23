@@ -4,8 +4,9 @@ A small multi-agent **web app** built to learn how production AI agents work —
 tools, knowledge bases (RAG), human approval, memory, skills and evals — where **every step runs for
 real and shows itself** in a live trace panel next to the chat.
 
-The main agent is **Arty**, a pink axolotl artist in a beret, drawn in the UI's flat "sticker" cartoon
-style. His face shows what the backend is doing: thinking, searching the knowledge base, blocked, happy.
+The main agent is **Arty**, an "interface friend": a little retro computer whose screen shows his face,
+wearing a red beret and carrying a paintbrush. His face shows what the backend is doing: thinking,
+searching the knowledge base, blocked, or happy (with a wink).
 
 > **The idea:** agent architecture is easy to read about and hard to *see*. Diagrams show boxes; they
 > don't show a guard blocking a message, a supervisor picking an agent, or a search pulling the right

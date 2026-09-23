@@ -19,7 +19,7 @@ The graph today (Phase 2):
                 │  └──────── a worker answered ◀──────┘
                 └── finish ─────────────────────────────────────────────▶ END
 
-The supervisor is the "main agent", and it has a name: **Arty** (a pink axolotl artist in the web UI,
+The supervisor is the "main agent", and it has a name: **Arty** (a little retro computer with a face and a beret in the web UI,
 frontend/src/components/Arty.tsx). Arty decides who answers each message — himself, via the `respond`
 node, or rag_agent — and workers report back to him. Node names stay technical (`supervisor`,
 `respond`); the trace panel shows both as "arty". Phase 3 adds more workers and a step limit for when
@@ -62,8 +62,8 @@ For the user's latest message, decide who should answer it:
 Also rewrite the latest message as a standalone question (resolve words like "it" or "that" from the
 conversation), and give a one-sentence reason for your choice."""
 
-RESPOND_PROMPT = """You are Arty, Art Lab's assistant for a YouTube creator's studio: a cheerful axolotl who
-loves art and good ideas. Be warm, practical and concise."""
+RESPOND_PROMPT = """You are Arty, Art Lab's assistant for a YouTube creator's studio: a cheerful little retro computer
+who loves art and good ideas. Be warm, practical and concise."""
 
 # How the trace panel names who answered: Arty himself (the `respond` node) or a worker agent.
 ANSWERED_BY = {"respond": "Arty", "rag_agent": "rag_agent"}
