@@ -1,0 +1,54 @@
+# Golden questions for the knowledge base (RAG).
+#
+# Each entry: a question, the file that answers it (repo-relative), and a short fact that must appear
+# in that file. `source: null` means the answer is NOT in the knowledge base: the right behaviour is
+# "I couldn't find that in the knowledge base", never an invented answer.
+#
+# Used by backend/tests/test_golden.py (facts really are in their files) and
+# backend/tests/test_retrieval_eval.py (search finds the right file).
+
+- question: Where in a video must a sponsorship be disclosed?
+  source: knowledge/sponsorship-policy.md
+  fact: first 30 seconds
+
+- question: Which kinds of companies do we refuse as sponsors?
+  source: knowledge/sponsorship-policy.md
+  fact: gambling, crypto trading, or vaping
+
+- question: How long can a sponsor segment be?
+  source: knowledge/sponsorship-policy.md
+  fact: 90 seconds
+
+- question: What is the maximum length of a video title?
+  source: knowledge/brand-voice.md
+  fact: 60 characters
+
+- question: On which days and at what time do we publish long videos?
+  source: knowledge/upload-checklist.md
+  fact: Tuesday or Thursday at 17:00 CET
+
+- question: How many chapter markers does a video need?
+  source: knowledge/upload-checklist.md
+  fact: at least 3 chapter markers
+
+- question: What happens when a commenter gets a third strike?
+  source: knowledge/moderation-rules.md
+  fact: permanent block
+
+- question: Who needs to approve a $900 equipment purchase?
+  source: knowledge/expenses-policy.md
+  fact: Jonas Weber
+
+- question: How many long videos do we publish each month?
+  source: knowledge/content-calendar.md
+  fact: 2 long videos per month
+
+- question: Which personas were parked in the backlog in the original Art Lab requirements?
+  source: docs/requirements.md
+  fact: gym-coach
+
+- question: What is our policy on filming in space?
+  source: null
+
+- question: How much does the studio pay towards health insurance?
+  source: null
