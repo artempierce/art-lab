@@ -90,10 +90,9 @@ Each phase ends **working, visible in the trace panel, tested, and documented**.
 |-------|------|--------|
 | 0 | Web MVP: streaming chat, trace panel, saved chats, LangSmith | ✅ done (real-Claude check pending API keys) |
 | 1 | Input guard: size, injection rules, per-chat budget | ✅ done |
-| 2 | Supervisor: routing + circuit breaker | next |
-| 3–4 | Tool gateway, worker agents | planned |
-| 4b | **RAG agent**: local vector DB of our files, search tool for `rag_agent` only, cited answers — tickets in [`docs/tickets/RAG.md`](docs/tickets/RAG.md) | planned |
-| 5–12 | Approval, memory, skills, handoffs, caps, evals, dashboards | planned |
+| 2 | **RAG agent**: local vector DB of our files, search tool for `rag_agent` only, main agent calls it as a tool, cited answers — tickets in [`docs/tickets/RAG.md`](docs/tickets/RAG.md) | next |
+| 3 | Supervisor: routing + circuit breaker | planned |
+| 4–13 | Tool gateway, workers, approval, memory, skills, handoffs, caps, evals, dashboards | planned |
 
 ---
 
@@ -126,7 +125,7 @@ art-lab/
 │   ├── design.html               # Design book: PRD, architecture, workflows, scenarios, plan, decisions
 │   ├── architecture.md           # Original architecture standard, cleaned up
 │   ├── tickets/
-│   │   └── RAG.md                # Phase 4b tickets RAG-1 … RAG-7
+│   │   └── RAG.md                # Phase 2 tickets RAG-1 … RAG-7
 │   ├── PLAN.md                   # Pointer to the design book
 │   └── requirements.md           # Superseded first draft, kept for history
 ├── backend/                      # Python 3.12 · uv · FastAPI · LangGraph

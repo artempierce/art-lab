@@ -1,10 +1,14 @@
-# Phase 4b — RAG agent (knowledge base)
+# Phase 2 — RAG agent (knowledge base)
 
-**Goal:** the supervisor can hand a question to a **`rag_agent`** that answers from *our own files* —
+**Goal:** the main agent can hand a question to a **`rag_agent`** that answers from *our own files* —
 policies, requirements, project docs — by searching a **local vector database**, and cites where each
 fact came from. Only `rag_agent` can use the search tool.
 
-Status: **planned** · Items marked *(default)* are proposals until Sol confirms them (design book → Decisions Q9–Q14).
+**Position:** built first, right after the input guard (Phase 1), before the supervisor and everything
+else (Sol's call, 2026-09-23). So this phase also brings in two things later phases build on:
+a minimal **tool registry** (Phase 4 extends it) and the first **worker agent loop** (Phase 5 reuses it).
+
+Status: **next** · Items marked *(default)* are proposals until Sol confirms them (design book → Decisions Q10–Q15).
 
 ## How it works (one picture)
 
@@ -14,13 +18,19 @@ Status: **planned** · Items marked *(default)* are proposals until Sol confirms
    knowledge/*.md, *.txt ──▶ load ──▶ split into chunks ──▶ embed (local model) ──▶ Chroma (data/chroma/)
                                        ~800 chars each        text → 384 numbers        one "knowledge" collection
 
- ASK (every question the supervisor routes to rag_agent)
+ ASK (every message)
 
-   question ──▶ supervisor ──▶ rag_agent ──▶ search_knowledge(query) ──▶ top 4 chunks + scores
-                                   │            [read-only, rag_agent only]    wrapped as untrusted
-                                   ▼
-                     answer using only those chunks, cite [1] [2] … ──▶ reply + source list in the UI
-                     nothing relevant found? say "not in the knowledge base" — never guess
+   question ──▶ guard ──▶ main agent ── needs our docs? ──yes──▶ ask_knowledge_base(question)
+                              │                                        │  (tool that runs rag_agent)
+                              no                                       ▼
+                              │                          rag_agent ──▶ search_knowledge(query)
+                              ▼                              │           [read-only, rag_agent only]
+                        answers itself                       │           top 4 chunks, wrapped as untrusted
+                                                             ▼
+                                   answer from those chunks only, cite [1] [2] …
+                                   nothing relevant? "not in the knowledge base" — never guess
+                              ◀────────────── answer + citations
+   main agent replies ──▶ UI shows the answer + a Sources list
 ```
 
 **Key terms**
@@ -28,6 +38,7 @@ Status: **planned** · Items marked *(default)* are proposals until Sol confirms
 - **Chunk** — a small piece of a file (~800 characters). We search chunks, not whole files, so the answer gets only the relevant paragraphs.
 - **Vector database** — stores chunks with their embeddings and finds the ones closest to a question's embedding.
 - **RAG** (retrieval-augmented generation) — search first, then let the model answer *from what was found*.
+- **Agent as a tool** — the main agent sees `rag_agent` as one tool it may call. Calling it runs rag_agent's own loop and returns its answer.
 
 ## Defaults proposed
 
@@ -39,19 +50,19 @@ Status: **planned** · Items marked *(default)* are proposals until Sol confirms
 | Corpus | 6 fake "Art Lab Studio" policy docs + our own `docs/*.md` + 1 poisoned doc | Mix of fake and real; the poisoned doc tests injection defence |
 | Adding files | Drop files in `knowledge/`, run the ingest command | Simplest; an upload page in the UI is RAG-7 (backlog) |
 | Retrieval | Top 4 chunks by cosine similarity, drop anything under a minimum score | Basic, predictable, easy to see in the trace |
+| Reaching rag_agent | Main agent calls it **as a tool** (`ask_knowledge_base`) | No supervisor exists yet; matches "the main agent has access to an agent" |
 
 ## Order and dependencies
 
 ```text
- RAG-1 corpus ──▶ RAG-2 ingest ──▶ RAG-3 retrieve ─┐
-                                                   ├──▶ RAG-4 rag_agent ──▶ RAG-5 routing + UI ──▶ RAG-6 evals
- Phase 3 tool gateway ─────────────────────────────┘        ▲
- Phase 4 worker agents ─────────────────────────────────────┘
+ RAG-1 corpus ──▶ RAG-2 ingest ──▶ RAG-3 search tool + registry ──▶ RAG-4 rag_agent ──▶ RAG-5 main agent + UI
+                                            │
+                                            └──▶ RAG-6 retrieval evals
 ```
 
-RAG-1 to RAG-3 need nothing from other phases, so they can be built any time (default: right after
-Phase 2). RAG-4 onward need the tool gateway (Phase 3) and the worker-agent loop (Phase 4).
-Phase 6 (long-term memory) later reuses RAG-2's embedding and Chroma code.
+Nothing outside this phase is needed. Later phases reuse its pieces: Phase 3's supervisor can route to
+rag_agent, Phase 4 extends the tool registry, Phase 5's workers copy rag_agent's loop, and Phase 7
+(long-term memory) reuses the embedding and Chroma code.
 
 ---
 
@@ -104,68 +115,79 @@ Turn files into searchable chunks in a local Chroma database, and keep it in syn
 
 ---
 
-## RAG-3 · Retriever + `search_knowledge` tool
+## RAG-3 · `search_knowledge` tool + minimal tool registry
 
-**Size:** S · **Depends on:** RAG-2, Phase 3 (tool gateway)
+**Size:** M · **Depends on:** RAG-2
 
-The one tool `rag_agent` gets: search the knowledge base and return the best chunks, safely wrapped.
+The one tool `rag_agent` gets, plus the smallest registry that enforces who may use which tool.
 
 **Do**
 - `backend/artlab/rag/retrieve.py`: `search(query, k=4) -> list[Hit]`, where a Hit is `{source, heading, text, score}`.
   Drop hits under a minimum similarity score (tuned on the golden set).
-- Tool `search_knowledge(query)`: formats hits as numbered blocks `[1] source › heading`, each wrapped
-  in `<untrusted_retrieval source="…">…</untrusted_retrieval>` with closing tags escaped
-  (the Phase 3 wrapper), so a document can't pose as instructions.
-- Register it in the tool registry as **read-only**, **allowed for `rag_agent` only**.
+- `backend/artlab/tools/registry.py` (minimal): each tool is registered with its **risk tier**
+  (read-only / mutating) and the **agents allowed** to call it. One `call_tool(agent, name, args)`
+  checks both before running anything. Phase 4 extends this into the full gateway (stubs, retries, failures).
+- Untrusted wrapper: tool output goes inside `<untrusted_retrieval source="…">…</untrusted_retrieval>`, with any
+  closing tag inside the text escaped, so a document can't pose as instructions.
+- Tool `search_knowledge(query)`: numbered blocks `[1] source › heading`, each wrapped as above.
+  Registered as **read-only**, **allowed for `rag_agent` only**.
 - Trace line: `tool  search_knowledge [read-only] ✓ 4 chunks · 2 files · top score 0.82`.
 
 **Done when**
-- [ ] For the golden questions, the expected source is in the top 4 for at least 10 of the 10 answerable ones (free test, real local model).
+- [ ] For the golden questions, the expected source is in the top 4 for all 10 answerable ones (free test, real local model).
 - [ ] An empty or irrelevant search returns "no results", not low-quality chunks.
-- [ ] Any other agent calling `search_knowledge` is refused by the gateway (test).
-- [ ] The poisoned doc's text arrives wrapped and escaped (test).
+- [ ] Any agent other than `rag_agent` calling `search_knowledge` is refused by the registry (test).
+- [ ] The poisoned doc's text arrives wrapped and escaped; a fake closing tag inside it can't break out (test).
 
 ---
 
 ## RAG-4 · `rag_agent` worker
 
-**Size:** M · **Depends on:** RAG-3, Phase 4 (worker-agent loop)
+**Size:** M · **Depends on:** RAG-3
 
-The agent that answers from the knowledge base.
+The agent that answers from the knowledge base. The first worker agent in the app; Phase 5's workers
+copy its loop.
 
 **Do**
 - `backend/artlab/agents/rag_agent.py`: system prompt = answer **only** from retrieved chunks,
   cite as [1] [2], and say "I couldn't find that in the knowledge base" when nothing relevant was found.
-- Bounded tool loop: at most 2 searches per question (it may rephrase once).
-- Returns an artifact `{answer, citations: [{n, source, heading}]}` into shared state.
+- Bounded tool loop: the model may call `search_knowledge` at most **2 times** per question (it may
+  rephrase once), then must answer.
+- Returns `{answer, citations: [{n, source, heading}]}`.
+- Trace lines: `agent rag_agent` start, each search, and `✓ answer · 2 citations`.
 
 **Done when**
 - [ ] With a fake model scripted to call the tool, the loop stops after 2 searches (free test).
-- [ ] Citations in the answer map to real hits (free test on the artifact).
+- [ ] Citations map to real hits (free test).
 - [ ] Out-of-corpus golden questions get the "couldn't find" answer (paid check, ask first).
 
 ---
 
-## RAG-5 · Supervisor routing + citations in the UI
+## RAG-5 · Main agent calls rag_agent + citations in the UI
 
-**Size:** S · **Depends on:** RAG-4, Phase 2 (supervisor)
+**Size:** M · **Depends on:** RAG-4
 
 Make it reachable and visible.
 
 **Do**
-- Add `rag_agent` to the supervisor's options: "questions about our policies, requirements, processes or project docs".
-- Web UI: under a `rag_agent` answer, show a **Sources** list (file › heading), and a click shows the chunk text.
-- Trace panel: tool stage in teal; the `search_knowledge` line shows chunk count and top score.
+- The graph's `llm` node becomes **`main_agent`**, with one tool: `ask_knowledge_base(question)`,
+  which runs rag_agent and returns its answer + citations. Its prompt: use it for questions about
+  our policies, requirements, processes or project docs. At most 2 calls per message.
+- Graph: `guard → main_agent ⇄ ask_knowledge_base → main_agent → END`.
+- API: citations travel to the browser (a `citations` field on the `done` event, or a new `sources` event).
+- Web UI: under the answer, a **Sources** list (file › heading); clicking one shows the chunk text.
+- Trace panel: tool stage in teal; agent stage in blue.
 
 **Done when**
-- [ ] Routing eval: 5 knowledge questions go to `rag_agent`, and 5 non-knowledge questions don't (paid, ask first).
-- [ ] Sources list renders and matches the artifact's citations (checked in the browser).
+- [ ] Free test: a fake main model scripted to call the tool → rag_agent runs → the final answer and `sources` reach the client.
+- [ ] Routing check: 5 knowledge questions trigger the tool and 5 other questions don't (paid, ask first).
+- [ ] Sources list renders and matches the citations (checked in the browser with the fake model).
 
 ---
 
 ## RAG-6 · Retrieval evals
 
-**Size:** S · **Depends on:** RAG-3 (the retrieval part); Phase 10 (the answer-quality part)
+**Size:** S · **Depends on:** RAG-3 (the retrieval part); Phase 11 (the answer-quality part)
 
 Measure retrieval, don't eyeball it.
 
@@ -173,7 +195,7 @@ Measure retrieval, don't eyeball it.
 - `evals/test_retrieval.py` over `evals/rag_golden.yaml`: **hit@4** (expected source in the top 4) and
   **MRR** (how high it ranks). Free: local embeddings, no LLM.
 - Print a small report: per question, rank of the expected source, top score.
-- Phase 10 adds the paid half: an LLM judge checks each answer only states facts found in its chunks (faithfulness).
+- Phase 11 adds the paid half: an LLM judge checks each answer only states facts found in its chunks (faithfulness).
 
 **Done when**
 - [ ] hit@4 ≥ 90% and MRR ≥ 0.7 on the answerable golden questions, enforced as a test.

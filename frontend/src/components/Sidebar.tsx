@@ -60,7 +60,7 @@ export function Sidebar({ threads, error, activeId, onOpen, onNew }: Props) {
         })}
       </nav>
 
-      {/* Roadmap placeholders: Memory page (Phase 11) and Runs page (Phase 12). */}
+      {/* Roadmap placeholders: Memory page (Phase 12) and Runs page (Phase 13). */}
       <div className="border-t border-rule pt-3">
         <p className="mb-1 px-3 font-mono text-[11px] tracking-wider text-muted uppercase">Coming later</p>
         <p className="px-3 py-1 text-sm text-muted">Memory</p>

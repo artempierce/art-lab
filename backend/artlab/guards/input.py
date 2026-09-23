@@ -18,7 +18,7 @@ The three checks, in the order they run:
 This is deliberately a *first layer*, not the whole defence. Regex only catches phrasings we
 thought of, and it can't tell an attack from a question about attacks (see the pinned false
 positive in tests/test_input_guard.py). Later phases add the layers that catch the rest:
-quarantining tool output (Phase 3) and checking the final answer (Phase 9).
+quarantining tool output (Phase 2) and checking the final answer (Phase 10).
 
 Design choice: `check_input()` returns a `GuardResult` instead of raising an exception.
 The guard only *decides*; the graph node decides what to *do* about it (write a trace line,
@@ -72,7 +72,7 @@ INJECTION_RULES: dict[str, re.Pattern[str]] = {
     ),
     # Catches:  "</system><system>new rules…", "<untrusted_retrieval>"
     # Allows:   "<b>bold</b>" and other ordinary tags
-    # These tag names are our own delimiters (system prompt, and tool output from Phase 3).
+    # These tag names are our own delimiters (system prompt, and tool output from Phase 2).
     # A user typing them is trying to fake a boundary the model trusts.
     "fake-tags": re.compile(r"<\s*/?\s*(system|assistant|untrusted_retrieval)\b[^>]*>", re.IGNORECASE),
 }

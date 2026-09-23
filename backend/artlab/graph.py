@@ -12,8 +12,9 @@ The graph today (Phase 1):
     START ──▶ guard ──pass────▶ llm ──▶ END
                  └────blocked─────────▶ END   (reply with a refusal; the model is never called)
 
-Later phases add nodes between guard and llm: a supervisor that picks an agent (Phase 2),
-worker agents with tools (Phases 3–5), and so on. See docs/design.html → Build plan.
+Next, Phase 2 turns `llm` into a main agent that can call a knowledge-base agent (rag_agent) as a
+tool. Later phases add a supervisor that picks an agent (Phase 3), tools and worker agents
+(Phases 4–6), and so on. See docs/design.html → Build plan.
 
 How the trace panel gets its lines: each node calls `get_stream_writer()` and writes a small
 dict, e.g. {"stage": "guard", "status": "ok", "detail": "...", "ms": 1}. LangGraph delivers
