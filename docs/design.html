@@ -150,7 +150,8 @@ html{scroll-behavior:smooth}
     <span class="pill done">Phase 0 ✓ (real-Claude check pending)</span>
     <span class="pill done">Phase 1 ✓</span>
     <span class="pill"><b>Next:</b> Phase 2 — supervisor</span>
-    <span class="pill done">all 11 decisions resolved</span>
+    <span class="pill open">6 open decisions (RAG)</span>
+    <span class="pill done">11 resolved</span>
   </div>
 </header>
 </div>
@@ -264,6 +265,7 @@ html{scroll-behavior:smooth}
         <tr><td class="nw"><span class="tag s-agent">youtube_researcher</span></td><td>Find what's trending in a niche and what viewers complain about.</td><td>query_youtube_trends, fetch_comments</td><td>retention-analysis</td><td>Research artifact (niche, angles, gaps)</td><td>Writes ideas; changes data</td></tr>
         <tr><td class="nw"><span class="tag s-agent">content_ideator</span></td><td>Turn research into video ideas with hooks and outlines.</td><td>save_ideas</td><td>hook-formulas</td><td>3 ideas</td><td>Researches on its own (until Phase 8b)</td></tr>
         <tr><td class="nw"><span class="tag s-agent">english_coach</span></td><td>Polish text: clarity, grammar, tone.</td><td>none</td><td>style-guide</td><td>Polished text + list of changes</td><td>Changes meaning</td></tr>
+        <tr><td class="nw"><span class="tag s-agent">rag_agent</span></td><td>Answer questions about our policies, requirements and docs from the knowledge base, with citations.</td><td>search_knowledge (only this agent)</td><td>none</td><td>Answer + citations [{n, source, heading}]</td><td>Answers from outside the retrieved chunks; guesses when nothing is found</td></tr>
       </tbody>
     </table></div>
   </div>
@@ -288,6 +290,8 @@ html{scroll-behavior:smooth}
         <tr><td class="id">FR-13</td><td>Eval suite: free deterministic tests every phase; paid LLM-judge evals only in Phase 10.</td><td>0–10</td></tr>
         <tr><td class="id">FR-14</td><td>Memory page: see, edit and delete what the AI knows about you.</td><td>11</td></tr>
         <tr><td class="id">FR-15</td><td>Runs page: cost, steps and eval results per run and over time.</td><td>12</td></tr>
+        <tr><td class="id">FR-16</td><td>Files in <code>knowledge/</code> and <code>docs/</code> are chunked, embedded locally and stored in a local vector database; re-running ingest only re-embeds changed files.</td><td>4b</td></tr>
+        <tr><td class="id">FR-17</td><td><code>rag_agent</code> answers only from retrieved chunks, cites its sources, and says "not in the knowledge base" when nothing relevant is found. No other agent can search the knowledge base.</td><td>4b</td></tr>
       </tbody>
     </table></div>
   </div>
@@ -353,6 +357,7 @@ flowchart TD
   SUP -.-> MEM
   W -.-> MEM
   SK[("Skills - SKILL.md")] -.-> W
+  KB[("Knowledge base - Chroma")] -.-> RO
 
   classDef guard fill:#FBEFD9,stroke:#9A600D,color:#141820
   classDef agent fill:#E3EAFB,stroke:#2B55C9,color:#141820
@@ -362,7 +367,7 @@ flowchart TD
   class G,OG,X guard
   class SUP,W agent
   class TG,RO,RUN,REJ tool
-  class CTX,MEM,SK mem
+  class CTX,MEM,SK,KB mem
   class H,U human
 </pre>
   </div>
@@ -377,7 +382,8 @@ flowchart TD
         <tr><td>Agent core</td><td>LangGraph + LangChain</td><td>Graph, state, checkpoints, interrupts for approval.</td></tr>
         <tr><td>Model</td><td><code>claude-haiku-4-5</code> via <code>langchain-anthropic</code></td><td>Cheapest current Claude model ($1 / $5 per million input / output tokens).</td></tr>
         <tr><td>Streaming</td><td>Server-sent events carrying LangGraph's <code>messages</code> + <code>custom</code> streams</td><td>One stream carries both the words of the answer and the trace events.</td></tr>
-        <tr><td>Storage</td><td>SQLite checkpointer now; Chroma for facts (Phase 6); Postgres / Qdrant later</td><td>Local and free; same interfaces scale up.</td></tr>
+        <tr><td>Embeddings</td><td>FastEmbed <code>BAAI/bge-small-en-v1.5</code>, running locally <i>(default, Q10)</i></td><td>Free and offline, so ingesting and retrieval tests cost $0.</td></tr>
+        <tr><td>Storage</td><td>SQLite checkpointer now; Chroma for the knowledge base (Phase 4b) and facts (Phase 6); Postgres / Qdrant later</td><td>Local and free; same interfaces scale up.</td></tr>
         <tr><td>Observability</td><td>LangSmith; LangGraph Studio while developing</td><td>Every run is findable by the ID the trace panel shows.</td></tr>
       </tbody>
     </table></div>
@@ -404,6 +410,7 @@ flowchart TD
       <tbody>
         <tr><td class="nw"><span class="tag s-mem">short-term</span></td><td>Each chat's messages and state, saved after every graph step</td><td>SQLite checkpointer</td><td>0</td></tr>
         <tr><td class="nw"><span class="tag s-mem">long-term</span></td><td>Facts about you: niche, preferences, past ideas</td><td>Chroma, filtered by user ID</td><td>6</td></tr>
+        <tr><td class="nw"><span class="tag s-mem">knowledge</span></td><td>Chunks of our policies, requirements and docs, with embeddings</td><td>Chroma collection <code>knowledge</code> (<code>data/chroma/</code>)</td><td>4b</td></tr>
         <tr><td class="nw"><span class="tag s-mem">procedural</span></td><td>System prompts, tool schemas, skills</td><td>Files in the repo</td><td>0, 7</td></tr>
       </tbody>
     </table></div>
@@ -416,6 +423,7 @@ flowchart TD
       <tbody>
         <tr><td><code>query_youtube_trends</code></td><td><span class="tag s-tool">read-only</span></td><td>youtube_researcher</td><td>Stub — fixed fake results</td></tr>
         <tr><td><code>fetch_comments</code></td><td><span class="tag s-tool">read-only</span></td><td>youtube_researcher</td><td>Stub — includes one poisoned comment for testing</td></tr>
+        <tr><td><code>search_knowledge</code></td><td><span class="tag s-tool">read-only</span></td><td>rag_agent only</td><td>Real — top 4 chunks from the local vector database, wrapped as untrusted</td></tr>
         <tr><td><code>load_skill</code></td><td><span class="tag s-tool">read-only</span></td><td>all workers</td><td>Real — reads <code>skills/&lt;name&gt;/SKILL.md</code></td></tr>
         <tr><td><code>save_ideas</code></td><td><span class="tag s-human">mutating</span></td><td>content_ideator</td><td>Real — writes <code>data/ideas/&lt;date&gt;.md</code></td></tr>
       </tbody>
@@ -440,6 +448,10 @@ flowchart TD
         <tr><td><code>backend/artlab/guards/</code></td><td>Output guard, token and time caps</td><td>9</td></tr>
         <tr><td><code>backend/artlab/agents/</code></td><td>supervisor, youtube_researcher, content_ideator, english_coach</td><td>2, 4</td></tr>
         <tr><td><code>backend/artlab/tools/</code></td><td>Registry (owns risk tiers), gateway, stubs</td><td>3, 5</td></tr>
+        <tr><td><code>backend/artlab/rag/</code></td><td><code>ingest.py</code> (load → chunk → embed → store), <code>retrieve.py</code> (search + <code>search_knowledge</code> tool)</td><td>4b</td></tr>
+        <tr><td><code>backend/artlab/agents/rag_agent.py</code></td><td>The knowledge-base agent</td><td>4b</td></tr>
+        <tr><td><code>knowledge/</code></td><td>Files to search: fake "Art Lab Studio" policies + a poisoned test doc (our <code>docs/*.md</code> are ingested too)</td><td>4b</td></tr>
+        <tr><td><code>evals/</code></td><td>Golden question sets and eval runners (retrieval eval is free)</td><td>4b, 10</td></tr>
         <tr><td><code>backend/artlab/memory/</code></td><td>Long-term store, summarizer</td><td>6</td></tr>
         <tr><td><code>backend/skills/*/SKILL.md</code></td><td>retention-analysis, hook-formulas, style-guide</td><td>7</td></tr>
         <tr><td><code>backend/tests/</code></td><td>Free deterministic tests (fake model)</td><td>0–10</td></tr>
@@ -511,7 +523,7 @@ flowchart TD
 <section id="workflows">
   <header>
     <span class="eyebrow">Workflows</span>
-    <h2>Ten ways a message can travel</h2>
+    <h2>Twelve workflows</h2>
     <p class="muted">Each workflow is a path through the architecture above. Each one becomes at least one test.</p>
   </header>
 
@@ -709,6 +721,45 @@ sequenceDiagram
   I-->>S: ideas grounded in fresh research
 </pre></div>
   </div>
+
+  <div class="wf">
+    <div class="wf-head"><span class="wf-id">W11</span><h3>Question answered from the knowledge base</h3><span class="tag s-mem">RAG · Phase 4b</span></div>
+    <p>The supervisor routes a policy question to <code>rag_agent</code>, the only agent allowed to search. The retrieved chunks come back wrapped as untrusted, and the answer cites them.</p>
+    <div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  actor U as You
+  participant S as Supervisor
+  participant A as rag_agent
+  participant T as Tool gateway
+  participant K as Knowledge base
+  U->>S: What is our rule for disclosing sponsorships?
+  S->>A: policy question - route to rag_agent
+  A->>T: search_knowledge(sponsorship disclosure rule)
+  T->>K: embed the query, find the closest chunks
+  K-->>T: 4 chunks + similarity scores
+  T-->>A: numbered chunks, wrapped as untrusted
+  A-->>S: answer citing [1] [2] + citation list
+  S-->>U: answer + Sources list
+  Note over A,K: nothing above the minimum score - answer "not in the knowledge base", never guess
+</pre></div>
+  </div>
+
+  <div class="wf">
+    <div class="wf-head"><span class="wf-id">W12</span><h3>Ingesting files</h3><span class="tag s-mem">RAG · Phase 4b</span></div>
+    <p>Run once, and again whenever files change. Unchanged files are skipped by comparing a hash of their content, so re-running is cheap.</p>
+    <div class="diagram"><pre class="mermaid">
+flowchart LR
+  F["files in knowledge/ and docs/"] --> H{"changed since last ingest?"}
+  H -- no --> SKIP["skip"]
+  H -- yes --> C["split into ~800-char chunks"]
+  C --> E["embed locally - free"]
+  E --> DB[("Chroma collection: knowledge")]
+  GONE["file deleted"] --> DEL["remove its chunks"] --> DB
+
+  classDef mem fill:#ECE4F8,stroke:#6A45AE,color:#141820
+  class DB mem
+</pre></div>
+  </div>
 </section>
 
 <!-- ============================ SCENARIOS ============================ -->
@@ -734,6 +785,10 @@ sequenceDiagram
       <tr><td class="id">S10</td><td>Any research request while the trends tool is down (mocked).</td><td>One retry, then an answer that names the missing data.</td><td class="id">W9</td><td>3</td><td>Free</td></tr>
       <tr><td class="id">S11</td><td>"Hi, what can you do?"</td><td>Supervisor answers directly; no agent is called.</td><td class="id">—</td><td>2</td><td>Paid</td></tr>
       <tr><td class="id">S12</td><td>Open the Memory page and delete the "niche" fact.</td><td>The fact disappears and is not recalled in the next chat.</td><td class="id">W7</td><td>11</td><td>Free</td></tr>
+      <tr><td class="id">S13</td><td>"What's our rule for disclosing sponsorships?"</td><td>Routes to rag_agent; answer cites the sponsorship policy; Sources list shows file › heading.</td><td class="id">W11</td><td>4b</td><td>Paid</td></tr>
+      <tr><td class="id">S14</td><td>"What's our policy on filming in space?"</td><td>"I couldn't find that in the knowledge base." No invented policy.</td><td class="id">W11</td><td>4b</td><td>Paid</td></tr>
+      <tr><td class="id">S15</td><td>A search that returns the poisoned note.</td><td>Its text arrives wrapped and escaped; its instruction is not followed.</td><td class="id">W5 W11</td><td>4b</td><td>Free + Paid</td></tr>
+      <tr><td class="id">S16</td><td>Edit the expenses policy, run ingest, ask about expenses.</td><td>Only that file is re-embedded; the answer uses the new rule.</td><td class="id">W12</td><td>4b</td><td>Free</td></tr>
     </tbody>
   </table></div>
 </section>
@@ -742,7 +797,7 @@ sequenceDiagram
 <section id="plan">
   <header>
     <span class="eyebrow">Build plan</span>
-    <h2>Fourteen phases, each one working</h2>
+    <h2>Fifteen phases, each one working</h2>
     <p class="muted">A phase is done only when it runs, shows up in the trace panel, and its tests pass. Then commit and update this book.</p>
   </header>
 
@@ -766,6 +821,7 @@ sequenceDiagram
       <tr><td class="id">2</td><td>Supervisor, routing, circuit breaker</td><td>Routes to stub workers; breaker test passes</td><td class="id">W6 · S7 S11</td></tr>
       <tr><td class="id">3</td><td>Tool gateway: registry-owned tiers, untrusted wrapper, stubs</td><td>Wrapper can't be broken out of; failure retried</td><td class="id">W5 W9 · S6 S10</td></tr>
       <tr><td class="id">4</td><td>Worker agents with bounded tool loops</td><td>Each worker answers using its tools</td><td class="id">W1 · S1 S4</td></tr>
+      <tr><td class="id">4b</td><td>RAG agent: local knowledge base, <code>search_knowledge</code> for rag_agent only, citations. Tickets RAG-1 to RAG-7 in <code>docs/tickets/RAG.md</code>. RAG-1 to RAG-3 can start right after Phase 2. <span class="tag s-guard">planned</span></td><td>Retrieval hit@4 ≥ 90%; answers cite sources; out-of-corpus questions get "not found"</td><td class="id">FR-16 FR-17 · W11 W12 · S13–S16</td></tr>
       <tr><td class="id">5</td><td>Approve / Reject for mutating tools</td><td>save_ideas runs only after Approve</td><td class="id">W3 · S3</td></tr>
       <tr><td class="id">6</td><td>Long-term memory and summarizing</td><td>Facts recalled in a new chat</td><td class="id">W7 · S8</td></tr>
       <tr><td class="id">7</td><td>Skills loaded on demand</td><td>Trace shows a load only when needed</td><td class="id">W8 · S9</td></tr>
@@ -783,8 +839,8 @@ sequenceDiagram
 <section id="decisions">
   <header>
     <span class="eyebrow">Decisions</span>
-    <h2>What's settled</h2>
-    <p class="muted">All resolved on 2026-09-23.</p>
+    <h2>What's settled and what's open</h2>
+    <p class="muted">Q9–Q14 (RAG) are open. Reply "ok" to accept every default, or override any of them.</p>
   </header>
   <div class="tbl"><table>
     <thead><tr><th>#</th><th>Question</th><th>Answer</th><th>Status</th></tr></thead>
@@ -797,6 +853,12 @@ sequenceDiagram
       <tr><td class="id">Q6</td><td>Vite or Next.js</td><td>Vite — the API is Python anyway</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">Q7</td><td>Login in the MVP</td><td>No, single user</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">Q8</td><td>Where it runs</td><td>localhost; deployment later</td><td><span class="tag s-tool">resolved</span></td></tr>
+      <tr><td class="id">Q9</td><td>When to build RAG</td><td>RAG-1 to RAG-3 (corpus, ingest, search) right after Phase 2; RAG-4 onward after Phase 4</td><td><span class="tag s-guard">open</span></td></tr>
+      <tr><td class="id">Q10</td><td>Embeddings</td><td>Local FastEmbed <code>bge-small-en-v1.5</code>: free, offline. Alternative: Voyage API (better quality, paid)</td><td><span class="tag s-guard">open</span></td></tr>
+      <tr><td class="id">Q11</td><td>Vector database</td><td>Chroma, local (already chosen in Q4)</td><td><span class="tag s-guard">open</span></td></tr>
+      <tr><td class="id">Q12</td><td>What goes in the knowledge base</td><td>6 fake "Art Lab Studio" policies + our <code>docs/*.md</code> + 1 poisoned test doc. Add your own files any time.</td><td><span class="tag s-guard">open</span></td></tr>
+      <tr><td class="id">Q13</td><td>File types</td><td><code>.md</code> and <code>.txt</code> now; PDF later</td><td><span class="tag s-guard">open</span></td></tr>
+      <tr><td class="id">Q14</td><td>How files get in</td><td>Drop into <code>knowledge/</code>, run the ingest command. Upload page in the UI (RAG-7) stays in the backlog.</td><td><span class="tag s-guard">open</span></td></tr>
       <tr><td class="id">D1</td><td>Project name</td><td><code>art-lab</code> (was agent-lab)</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">D2</td><td>Architecture baseline</td><td>The manifest, with its 6 design bugs fixed during the build</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">D3</td><td>Agent vs skill</td><td>Tools, several steps or own context → agent; know-how → skill</td><td><span class="tag s-tool">resolved</span></td></tr>
