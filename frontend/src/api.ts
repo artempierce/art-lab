@@ -11,8 +11,17 @@
 /** One chat in the sidebar (GET /api/threads). `updated_at` is an ISO-8601 timestamp. */
 export type Thread = { thread_id: string; title: string; updated_at: string }
 
-/** One chat bubble. `error` marks a bubble that shows a failure instead of a real answer. */
-export type Message = { role: 'user' | 'assistant'; content: string; error?: boolean }
+/**
+ * One knowledge-base passage an answer was based on. `n` is its citation number ([1], [2], …) in the
+ * answer; `score` is how relevant search judged it (0–1); `text` is the chunk itself.
+ */
+export type Source = { n: number; source: string; heading: string; text: string; score: number }
+
+/**
+ * One chat bubble. `error` marks a bubble that shows a failure instead of a real answer; `sources`
+ * are the passages rag_agent answered from (empty for other answers).
+ */
+export type Message = { role: 'user' | 'assistant'; content: string; error?: boolean; sources?: Source[] }
 
 /** One line in the trace panel, written by a graph node (e.g. stage "guard", status "ok"). */
 export type TraceLine = { stage: string; status: string; detail: string; ms: number }
@@ -29,7 +38,7 @@ export type ChatEvent =
   | { type: 'start'; trace_id: string; thread_id: string }
   | ({ type: 'trace' } & TraceLine)
   | { type: 'token'; text: string }
-  | ({ type: 'done' } & RunSummary)
+  | ({ type: 'done'; sources: Source[] } & RunSummary)
   | { type: 'error'; message: string }
 
 /** GET a URL and parse its JSON body; throws if the server answers with an error status. */

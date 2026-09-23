@@ -4,9 +4,12 @@
  *
  * One block per message you sent (a Run), each with:
  *   › your message (shortened)                         trace ID (click to copy, find it in LangSmith)
- *   ✓ guard   pass · 44 chars · budget 0.4% used                                                  1ms
- *   ✓ llm     claude-haiku-4-5 · 812 in / 240 out                                              2310ms
- *   1.1k tok · $0.0020 · 2.3s                                              ← footer, when the run ends
+ *   ✓ guard        pass · 44 chars · budget 0.4% used                                             1ms
+ *   ✓ supervisor   → rag_agent · question about studio policy                                   620ms
+ *   ✓ tool         search_knowledge [read-only] · 4 chunks · 2 files · top 0.81                  40ms
+ *   ✓ rag_agent    claude-haiku-4-5 · 812 in / 240 out · cites [1] [2]                         2310ms
+ *   ✓ supervisor   finish · answered by rag_agent                                                 0ms
+ *   1.4k tok · $0.0024 · 3.0s                                              ← footer, when the run ends
  *
  * The lines come straight from the backend's `trace` events (each graph node writes one).
  * New stages (supervisor, tools, memory…) show up here automatically as later phases add them;
@@ -15,9 +18,15 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Run } from '../App'
 
-// Stage name → text colour, matching the design book: guard amber, agent blue.
-// (tool teal, memory violet and human rose are defined in index.css for later phases.)
-const STAGE_COLOR: Record<string, string> = { guard: 'text-t-guard', llm: 'text-t-agent' }
+// Stage name → text colour, matching the design book: guard amber, agents blue, tools teal.
+// (memory violet and human rose are defined in index.css for later phases.)
+const STAGE_COLOR: Record<string, string> = {
+  guard: 'text-t-guard',
+  supervisor: 'text-t-agent',
+  respond: 'text-t-agent',
+  rag_agent: 'text-t-agent',
+  tool: 'text-t-tool',
+}
 
 // Status → icon at the start of the line. Unknown statuses get a plain dot.
 const STATUS_ICON: Record<string, string> = { ok: '✓', blocked: '⛔', error: '✕' }
@@ -70,7 +79,7 @@ function RunBlock({ run, running }: { run: Run; running: boolean }) {
           const color = failed ? 'text-t-human' : (STAGE_COLOR[line.stage] ?? 'text-term-ink')
           return (
             // Four columns: icon | stage | detail (wraps if long) | time
-            <li key={i} className="grid grid-cols-[1.4em_4.5em_minmax(0,1fr)_auto] gap-x-2">
+            <li key={i} className="grid grid-cols-[1.4em_6.5em_minmax(0,1fr)_auto] gap-x-2">
               <span className={color}>{STATUS_ICON[line.status] ?? '•'}</span>
               <span className={color}>{line.stage}</span>
               <span className="break-words">{line.detail}</span>

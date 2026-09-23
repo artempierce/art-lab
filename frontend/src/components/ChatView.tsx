@@ -7,7 +7,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
-import type { Message } from '../api'
+import type { Message, Source } from '../api'
 
 type Props = {
   title: string // shown in the header
@@ -134,8 +134,36 @@ function Bubble({ message, waiting }: { message: Message; waiting: boolean }) {
   }
   // `prose` (Tailwind typography plugin) styles the HTML that Markdown produces.
   return (
-    <div className="prose max-w-none prose-neutral dark:prose-invert prose-p:my-2 prose-pre:bg-bg prose-pre:text-ink">
-      <Markdown>{message.content}</Markdown>
+    <div>
+      <div className="prose max-w-none prose-neutral dark:prose-invert prose-p:my-2 prose-pre:bg-bg prose-pre:text-ink">
+        <Markdown>{message.content}</Markdown>
+      </div>
+      {message.sources && message.sources.length > 0 && <Sources sources={message.sources} />}
+    </div>
+  )
+}
+
+/**
+ * The passages a knowledge-base answer was built from, numbered like the [1] [2] citations in it.
+ * Each is a native <details> element: click the line to unfold the chunk's text (no extra state needed).
+ */
+function Sources({ sources }: { sources: Source[] }) {
+  return (
+    <div className="mt-3 border-t border-rule pt-3">
+      <p className="mb-1.5 font-mono text-[11px] tracking-wider text-muted uppercase">Sources</p>
+      <ol className="space-y-1">
+        {sources.map((s) => (
+          <li key={s.n}>
+            <details className="text-sm">
+              <summary className="cursor-pointer text-muted hover:text-ink">
+                <span className="font-mono text-accent">[{s.n}]</span> {s.source}
+                {s.heading && ` › ${s.heading}`} <span className="font-mono text-xs">· {s.score.toFixed(2)}</span>
+              </summary>
+              <p className="mt-1.5 ml-5 rounded-lg bg-bg p-3 text-xs whitespace-pre-wrap text-muted">{s.text}</p>
+            </details>
+          </li>
+        ))}
+      </ol>
     </div>
   )
 }

@@ -104,7 +104,9 @@ export default function App() {
           updateReply((m) => ({ ...m, content: m.content + e.text }))
           break
         case 'done':
+          // The totals go to the trace panel; the sources (if rag_agent answered) go under the reply.
           updateLastRun((r) => ({ ...r, summary: e }))
+          updateReply((m) => ({ ...m, sources: e.sources }))
           break
         case 'error':
           showError(e.message)
