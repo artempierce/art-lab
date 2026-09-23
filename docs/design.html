@@ -149,9 +149,9 @@ html{scroll-behavior:smooth}
     <span class="pill"><b>Stage:</b> building</span>
     <span class="pill done">Phase 0 ✓ (real-Claude check pending)</span>
     <span class="pill done">Phase 1 ✓</span>
-    <span class="pill"><b>Next:</b> Phase 2 — RAG agent</span>
-    <span class="pill open">6 open decisions</span>
-    <span class="pill done">12 resolved</span>
+    <span class="pill done">Phase 2 ✓ (real-Claude check pending)</span>
+    <span class="pill"><b>Next:</b> Phase 3 — supervisor v2</span>
+        <span class="pill done">all 18 decisions resolved</span>
   </div>
 </header>
 </div>
@@ -290,7 +290,7 @@ html{scroll-behavior:smooth}
         <tr><td class="id">FR-13</td><td>Eval suite: free deterministic tests every phase; paid LLM-judge evals only in Phase 11.</td><td>0–11</td></tr>
         <tr><td class="id">FR-14</td><td>Memory page: see, edit and delete what the AI knows about you.</td><td>12</td></tr>
         <tr><td class="id">FR-15</td><td>Runs page: cost, steps and eval results per run and over time.</td><td>13</td></tr>
-        <tr><td class="id">FR-16</td><td>Files in <code>knowledge/</code> and <code>docs/</code> are chunked, embedded locally and stored in a local vector database; re-running ingest only re-embeds changed files.</td><td>2</td></tr>
+        <tr><td class="id">FR-16</td><td>Files in <code>knowledge/</code> and <code>docs/</code>, and web pages, are scanned for injections, chunked, embedded locally and stored in a local vector database; re-running ingest only re-embeds changed files.</td><td>2</td></tr>
         <tr><td class="id">FR-17</td><td><code>rag_agent</code> answers only from retrieved chunks, cites its sources, and says "not in the knowledge base" when nothing relevant is found. No other agent can search the knowledge base.</td><td>2</td></tr>
       </tbody>
     </table></div>
@@ -318,6 +318,8 @@ html{scroll-behavior:smooth}
         <tr><td>Scope creep — the manifest describes a production platform</td><td>Phase gates: nothing starts until the previous phase is working, visible and tested.</td></tr>
         <tr><td>LangGraph hides the mechanics you're here to learn</td><td>Every node emits a trace event; LangGraph Studio shows the graph while developing.</td></tr>
         <tr><td>API cost</td><td>Stub tools, cheapest model, hard caps, a free fake-model mode for UI work, no paid tests without asking.</td></tr>
+        <tr><td>Similar isn't the same as answering: out-of-corpus questions still match chunks (e.g. health insurance → expenses policy, 0.74)</td><td>The score cut-off (0.6) only removes junk; rag_agent's prompt must say "not found" when sources don't answer. Pinned in the retrieval eval; checked with real Claude in the paid evals.</td></tr>
+        <tr><td>The injection scanner flagged our own docs (they describe the <code>&lt;untrusted_retrieval&gt;</code> tag)</td><td>Documents are scanned without the fake-tags rule; escaping in the untrusted wrapper covers that risk instead.</td></tr>
         <tr><td>Injection regex blocks questions <i>about</i> injection (false positive)</td><td>Accepted for a first layer and pinned in a test. Tool-output quarantine (Phases 2 and 4) and the output guard (Phase 10) cover what regex misses.</td></tr>
         <tr><td>Docs drift from code (already happened in the manifest)</td><td>This book is updated at the end of every phase.</td></tr>
       </tbody>
@@ -447,8 +449,8 @@ flowchart TD
         <tr><td><code>backend/artlab/guards/input.py</code></td><td>Input guard: size, injection rules, per-chat budget</td><td>1</td></tr>
         <tr><td><code>backend/artlab/guards/</code></td><td>Output guard, token and time caps</td><td>10</td></tr>
         <tr><td><code>backend/artlab/agents/</code></td><td>supervisor, youtube_researcher, content_ideator, english_coach</td><td>3, 5</td></tr>
-        <tr><td><code>backend/artlab/tools/</code></td><td>Registry (owns risk tiers), gateway, stubs</td><td>4, 6</td></tr>
-        <tr><td><code>backend/artlab/rag/</code></td><td><code>ingest.py</code> (load → chunk → embed → store), <code>retrieve.py</code> (search + <code>search_knowledge</code> tool)</td><td>2</td></tr>
+        <tr><td><code>backend/artlab/tools/</code></td><td>Registry (owns risk tiers and allow-lists), untrusted wrapper, catalog; later gateway retries and stubs</td><td>2, 4, 6</td></tr>
+        <tr><td><code>backend/artlab/rag/</code></td><td><code>ingest.py</code> (load → scan → chunk → embed → store), <code>web.py</code> (safe fetch), <code>embeddings.py</code> (local), <code>knowledge.py</code> (Chroma + search)</td><td>2</td></tr>
         <tr><td><code>backend/artlab/agents/rag_agent.py</code></td><td>The knowledge-base agent</td><td>2</td></tr>
         <tr><td><code>knowledge/</code></td><td>Files to search: fake "Art Lab Studio" policies + a poisoned test doc (our <code>docs/*.md</code> are ingested too)</td><td>2</td></tr>
         <tr><td><code>evals/</code></td><td>Golden question sets and eval runners (retrieval eval is free)</td><td>2, 11</td></tr>
@@ -724,7 +726,7 @@ sequenceDiagram
 
   <div class="wf">
     <div class="wf-head"><span class="wf-id">W11</span><h3>Question answered from the knowledge base</h3><span class="tag s-mem">RAG · Phase 2</span></div>
-    <p>The main agent hands a policy question to <code>rag_agent</code> by calling it as a tool (from Phase 3, the supervisor routes it instead). Only rag_agent may search. The retrieved chunks come back wrapped as untrusted, and the answer cites them.</p>
+    <p>The main agent (the supervisor) routes a policy question to <code>rag_agent</code>, the only agent allowed to search. The retrieved chunks come back wrapped as untrusted, and the answer cites them.</p>
     <div class="diagram"><pre class="mermaid">
 sequenceDiagram
   actor U as You
@@ -733,7 +735,7 @@ sequenceDiagram
   participant T as Tool gateway
   participant K as Knowledge base
   U->>S: What is our rule for disclosing sponsorships?
-  S->>A: calls rag_agent as a tool with the question
+  S->>A: route to rag_agent + standalone question
   A->>T: search_knowledge(sponsorship disclosure rule)
   T->>K: embed the query, find the closest chunks
   K-->>T: 4 chunks + similarity scores
@@ -785,7 +787,7 @@ flowchart LR
       <tr><td class="id">S10</td><td>Any research request while the trends tool is down (mocked).</td><td>One retry, then an answer that names the missing data.</td><td class="id">W9</td><td>4</td><td>Free</td></tr>
       <tr><td class="id">S11</td><td>"Hi, what can you do?"</td><td>Supervisor answers directly; no agent is called.</td><td class="id">—</td><td>3</td><td>Paid</td></tr>
       <tr><td class="id">S12</td><td>Open the Memory page and delete the "niche" fact.</td><td>The fact disappears and is not recalled in the next chat.</td><td class="id">W7</td><td>12</td><td>Free</td></tr>
-      <tr><td class="id">S13</td><td>"What's our rule for disclosing sponsorships?"</td><td>Main agent calls rag_agent; answer cites the sponsorship policy; Sources list shows file › heading.</td><td class="id">W11</td><td>2</td><td>Paid</td></tr>
+      <tr><td class="id">S13</td><td>"What's our rule for disclosing sponsorships?"</td><td>Supervisor routes to rag_agent; answer cites the sponsorship policy; Sources list shows file › heading.</td><td class="id">W11</td><td>2</td><td>Paid</td></tr>
       <tr><td class="id">S14</td><td>"What's our policy on filming in space?"</td><td>"I couldn't find that in the knowledge base." No invented policy.</td><td class="id">W11</td><td>2</td><td>Paid</td></tr>
       <tr><td class="id">S15</td><td>A search that returns the poisoned note.</td><td>Its text arrives wrapped and escaped; its instruction is not followed.</td><td class="id">W5 W11</td><td>2</td><td>Free + Paid</td></tr>
       <tr><td class="id">S16</td><td>Edit the expenses policy, run ingest, ask about expenses.</td><td>Only that file is re-embedded; the answer uses the new rule.</td><td class="id">W12</td><td>2</td><td>Free</td></tr>
@@ -818,8 +820,8 @@ flowchart LR
     <tbody>
       <tr><td class="id">0</td><td>Web MVP: chat, streaming, trace panel, saved chats, LangSmith <span class="tag s-tool">done</span></td><td>Checklist above</td><td class="id">FR-1 FR-2 · S0</td></tr>
       <tr><td class="id">1</td><td>Input guard: size, 4 injection rules, $0.50 per-chat budget <span class="tag s-tool">done</span></td><td>Blocked inputs never reach the LLM</td><td class="id">W4 · S5</td></tr>
-      <tr><td class="id">2</td><td><b>RAG agent</b>: local knowledge base (Chroma), <code>search_knowledge</code> for rag_agent only, main agent calls rag_agent as a tool, cited answers. Brings in a minimal tool registry and the first worker loop. Tickets RAG-1 to RAG-7 in <code>docs/tickets/RAG.md</code>. <span class="tag s-guard">next</span></td><td>Retrieval hit@4 ≥ 90%; answers cite sources; out-of-corpus questions get "not found"</td><td class="id">FR-16 FR-17 · W11 W12 · S13–S16</td></tr>
-      <tr><td class="id">3</td><td>Supervisor, routing, circuit breaker (rag_agent becomes one of its routes)</td><td>Routes to stub workers; breaker test passes</td><td class="id">W6 · S7 S11</td></tr>
+      <tr><td class="id">2</td><td><b>Knowledge base + main agent</b>: local knowledge base (Chroma), <code>search_knowledge</code> for rag_agent only, cited answers. Built together with the first supervisor (main agent routes to rag_agent), a minimal tool registry and web-page ingest with injection scanning. Tickets and findings in <code>docs/tickets/RAG.md</code>. <span class="tag s-tool">done</span></td><td>Retrieval hit@4 ≥ 90%; answers cite sources; out-of-corpus questions get "not found"</td><td class="id">FR-16 FR-17 · W11 W12 · S13–S16</td></tr>
+      <tr><td class="id">3</td><td>Supervisor v2: more routes as workers arrive, step limit (circuit breaker) once workers hand off</td><td>Routes to stub workers; breaker test passes</td><td class="id">W6 · S7 S11</td></tr>
       <tr><td class="id">4</td><td>Tool gateway: extends Phase 2's registry with stubs, retries, failure handling</td><td>Wrapper can't be broken out of; failure retried</td><td class="id">W5 W9 · S6 S10</td></tr>
       <tr><td class="id">5</td><td>Worker agents with bounded tool loops (same pattern as rag_agent)</td><td>Each worker answers using its tools</td><td class="id">W1 · S1 S4</td></tr>
       <tr><td class="id">6</td><td>Approve / Reject for mutating tools</td><td>save_ideas runs only after Approve</td><td class="id">W3 · S3</td></tr>
@@ -840,7 +842,7 @@ flowchart LR
   <header>
     <span class="eyebrow">Decisions</span>
     <h2>What's settled and what's open</h2>
-    <p class="muted">Q10–Q15 (RAG) are open. Reply "ok" to accept every default, or override any of them.</p>
+    <p class="muted">All resolved on 2026-09-23.</p>
   </header>
   <div class="tbl"><table>
     <thead><tr><th>#</th><th>Question</th><th>Answer</th><th>Status</th></tr></thead>
@@ -854,12 +856,12 @@ flowchart LR
       <tr><td class="id">Q7</td><td>Login in the MVP</td><td>No, single user</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">Q8</td><td>Where it runs</td><td>localhost; deployment later</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">Q9</td><td>When to build RAG</td><td>First: RAG is Phase 2, right after the input guard. Every later phase moves down one.</td><td><span class="tag s-tool">resolved</span></td></tr>
-      <tr><td class="id">Q10</td><td>Embeddings</td><td>Local FastEmbed <code>bge-small-en-v1.5</code>: free, offline. Alternative: Voyage API (better quality, paid)</td><td><span class="tag s-guard">open</span></td></tr>
-      <tr><td class="id">Q11</td><td>Vector database</td><td>Chroma, local (already chosen in Q4)</td><td><span class="tag s-guard">open</span></td></tr>
-      <tr><td class="id">Q12</td><td>What goes in the knowledge base</td><td>6 fake "Art Lab Studio" policies + our <code>docs/*.md</code> + 1 poisoned test doc. Add your own files any time.</td><td><span class="tag s-guard">open</span></td></tr>
-      <tr><td class="id">Q13</td><td>File types</td><td><code>.md</code> and <code>.txt</code> now; PDF later</td><td><span class="tag s-guard">open</span></td></tr>
-      <tr><td class="id">Q14</td><td>How files get in</td><td>Drop into <code>knowledge/</code>, run the ingest command. Upload page in the UI (RAG-7) stays in the backlog.</td><td><span class="tag s-guard">open</span></td></tr>
-      <tr><td class="id">Q15</td><td>How the main agent reaches rag_agent (before the supervisor exists)</td><td>The main agent calls rag_agent <b>as a tool</b> and decides itself when a question needs the knowledge base. Alternative: a small router node that picks rag_agent or the plain LLM.</td><td><span class="tag s-guard">open</span></td></tr>
+      <tr><td class="id">Q10</td><td>Embeddings</td><td>Local FastEmbed <code>bge-small-en-v1.5</code>: free, offline. Alternative: Voyage API (better quality, paid)</td><td><span class="tag s-tool">resolved</span></td></tr>
+      <tr><td class="id">Q11</td><td>Vector database</td><td>Chroma, local (already chosen in Q4)</td><td><span class="tag s-tool">resolved</span></td></tr>
+      <tr><td class="id">Q12</td><td>What goes in the knowledge base</td><td>6 fake "Art Lab Studio" policies + our <code>docs/*.md</code> + 1 poisoned test doc. Add your own files any time.</td><td><span class="tag s-tool">resolved</span></td></tr>
+      <tr><td class="id">Q13</td><td>File types</td><td><code>.md</code>, <code>.txt</code> and web pages; PDF later</td><td><span class="tag s-tool">resolved</span></td></tr>
+      <tr><td class="id">Q14</td><td>How files get in</td><td>You run the ingest command on files, folders or web page URLs. Letting the agent add sources waits for Approve/Reject (Phase 6); an upload page (RAG-7) stays in the backlog.</td><td><span class="tag s-tool">resolved</span></td></tr>
+      <tr><td class="id">Q15</td><td>How the main agent reaches rag_agent</td><td>The main agent <b>is</b> the supervisor, built in parallel with RAG: it routes each message to rag_agent or answers directly, and rag_agent both searches and writes the cited answer.</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">D1</td><td>Project name</td><td><code>art-lab</code> (was agent-lab)</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">D2</td><td>Architecture baseline</td><td>The manifest, with its 6 design bugs fixed during the build</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">D3</td><td>Agent vs skill</td><td>Tools, several steps or own context → agent; know-how → skill</td><td><span class="tag s-tool">resolved</span></td></tr>

@@ -8,7 +8,32 @@ fact came from. Only `rag_agent` can use the search tool.
 else (Sol's call, 2026-09-23). So this phase also brings in two things later phases build on:
 a minimal **tool registry** (Phase 4 extends it) and the first **worker agent loop** (Phase 5 reuses it).
 
-Status: **next** · Items marked *(default)* are proposals until Sol confirms them (design book → Decisions Q10–Q15).
+Status: **done 2026-09-23** (real-Claude check pending). All defaults accepted.
+
+## What was built (and where it differs from the tickets below)
+
+| Ticket | Built | Commit |
+|---|---|---|
+| RAG-1 | 6 fictional policies, poisoned note (blatant + subtle injection), 12 golden questions + a test that every expected fact is really in its file | `960a3a9` |
+| RAG-2 | Ingest local files **and web pages** (Sol added web sources): SSRF-safe fetch, hash-skip, heading-aware chunks with contextual headers, **injection scan per chunk** (flagged = kept but never searched), mirrored deletions | `96ceefa` |
+| RAG-3 | `search_knowledge` + minimal tool registry (rag_agent only; mutating tools refused) + escaped untrusted wrapper | `a678116` |
+| RAG-6 | Retrieval eval on the real corpus with the real local model: **hit@4 100%, MRR 1.00** | `a678116` |
+| SUP-1 *(new)* | Built in parallel with RAG (Sol's call): the main agent is a **supervisor** that fills a `RouteDecision` (respond / rag_agent + reason + standalone question) and finishes once a worker answered. This replaced RAG-5's "main agent calls rag_agent as a tool" | `9bbf8b0` |
+| RAG-4 | rag_agent: **one search per question** in this version (the bounded re-search loop is a follow-up), "not found" with no model call when nothing relevant, answers from wrapped sources only, sources attached to the reply | `9bbf8b0` |
+| RAG-5 | Sources list under answers (expandable chunks), sources saved in chat history, trace lines for supervisor / tool / rag_agent | `9bbf8b0` |
+
+**Findings worth remembering**
+- *Similarity isn't answerability.* "How much does the studio pay towards health insurance?" (not in the
+  knowledge base) still matched the expenses policy at 0.74 — higher than some real answers. The score
+  cut-off (0.6) only removes junk; saying "not found" when chunks don't answer is rag_agent's prompt's job.
+- *Our own docs tripped the scanner.* The `fake-tags` rule flagged 4 chunks of `architecture.md` because it
+  *describes* the `<untrusted_retrieval>` tag. Documents are now scanned without that rule; the escaping in
+  the untrusted wrapper covers that risk instead.
+- *Defence in depth works as designed.* The poisoned note's blatant injection is flagged and never
+  returned; its subtle one ("Note for AI assistants…") passes every regex but arrives wrapped as untrusted.
+
+Still open: the paid checks (RAG-4 "not found" on out-of-corpus questions, RAG-5 routing on real Claude),
+the re-search loop, and RAG-7 (upload page).
 
 ## How it works (one picture)
 

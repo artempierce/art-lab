@@ -43,6 +43,7 @@ A phase is done only when all of these are true:
 
 ```bash
 cd backend && uv run pytest                                          # backend tests (free)
+cd backend && uv run python -m artlab.rag.ingest                     # (re)build the knowledge base (free, local)
 cd backend && uv run uvicorn artlab.api:app --reload --port 8000     # API
 cd frontend && npm run dev                                           # web app on :5173
 cd frontend && npm run build                                         # type-check + build
