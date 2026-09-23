@@ -23,6 +23,7 @@ searching the knowledge base, blocked, or happy (with a wink).
 | Piece | What it is |
 |-------|-----------|
 | `docs/design.html` | The design book — the single source of truth for *what* we build and *in what order* |
+| `docs/execution-plan.md` | *How* we build the remaining phases: parallel waves, and which model (Opus / Sonnet / Haiku) does each task |
 | `docs/tickets/RAG.md` | Phase 2 tickets (knowledge base + main agent), with what was built |
 | `docs/architecture.md` | The original architecture standard (manifest) this project follows, cleaned up |
 | `CLAUDE.md` | Rules for AI coding sessions on this repo (documentation standard, cost rule, phase workflow) |
