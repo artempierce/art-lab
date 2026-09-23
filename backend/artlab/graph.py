@@ -19,9 +19,11 @@ The graph today (Phase 2):
                 │  └──────── a worker answered ◀──────┘
                 └── finish ─────────────────────────────────────────────▶ END
 
-The supervisor is the "main agent": it decides who answers each message, and workers report back to
-it. Today the only choices are answering directly or asking rag_agent; Phase 3 adds more workers and
-a step limit for when workers start handing work to each other.
+The supervisor is the "main agent", and it has a name: **Arty** (a pink axolotl artist in the web UI,
+frontend/src/components/Arty.tsx). Arty decides who answers each message — himself, via the `respond`
+node, or rag_agent — and workers report back to him. Node names stay technical (`supervisor`,
+`respond`); the trace panel shows both as "arty". Phase 3 adds more workers and a step limit for when
+workers start handing work to each other.
 
 How the trace panel gets its lines: each node calls `get_stream_writer()` and writes a small dict,
 e.g. {"stage": "guard", "status": "ok", "detail": "...", "ms": 1}. LangGraph delivers those dicts on
@@ -51,15 +53,20 @@ from artlab.tools.registry import ToolRegistry
 # Sent to the model on each call, never stored in the chat history, so they can change any time
 # without rewriting old chats.
 
-SUPERVISOR_PROMPT = """You are the supervisor of Art Lab, an assistant for a YouTube creator's studio.
+SUPERVISOR_PROMPT = """You are Arty, the main agent of Art Lab, an assistant for a YouTube creator's studio.
 For the user's latest message, decide who should answer it:
 - "rag_agent": questions about the studio's own policies, rules, processes, checklists, requirements or
   project documents - anything that needs the studio's knowledge base.
-- "respond": everything else - small talk, general knowledge, writing or brainstorming help.
+- "respond": everything else, which you answer yourself - small talk, general knowledge, writing or
+  brainstorming help.
 Also rewrite the latest message as a standalone question (resolve words like "it" or "that" from the
 conversation), and give a one-sentence reason for your choice."""
 
-RESPOND_PROMPT = "You are Art Lab, a helpful assistant for a YouTube creator. Be concise."
+RESPOND_PROMPT = """You are Arty, Art Lab's assistant for a YouTube creator's studio: a cheerful axolotl who
+loves art and good ideas. Be warm, practical and concise."""
+
+# How the trace panel names who answered: Arty himself (the `respond` node) or a worker agent.
+ANSWERED_BY = {"respond": "Arty", "rag_agent": "rag_agent"}
 
 RAG_PROMPT = """You are rag_agent, Art Lab's knowledge-base specialist. Answer the question using ONLY
 the numbered sources provided.
@@ -183,7 +190,8 @@ def build_graph(model: BaseChatModel, checkpointer: BaseCheckpointSaver, tools: 
 
         # A. Done?
         if state.get("answered_by"):
-            write({"stage": "supervisor", "status": "ok", "detail": f"finish · answered by {state['answered_by']}", "ms": _ms_since(start)})
+            who = ANSWERED_BY.get(state["answered_by"], state["answered_by"])
+            write({"stage": "arty", "status": "ok", "detail": f"done · answered by {who}", "ms": _ms_since(start)})
             return Command(goto=END)
 
         # B. Route. `out` is {"parsed": RouteDecision | None, "raw": the reply, "parsing_error": ...}.
@@ -193,8 +201,9 @@ def build_graph(model: BaseChatModel, checkpointer: BaseCheckpointSaver, tools: 
             decision = RouteDecision(next="respond", reason="routing output was invalid; answering directly", question=text_of(state["messages"][-1]))
 
         tokens_in, tokens_out = _tokens(out["raw"])
+        choice = "answering myself" if decision.next == "respond" else f"→ {decision.next}"
         write({
-            "stage": "supervisor", "status": "ok", "detail": f"→ {decision.next} · {decision.reason}",
+            "stage": "arty", "status": "ok", "detail": f"{choice} · {decision.reason}",
             "ms": _ms_since(start), "input_tokens": tokens_in, "output_tokens": tokens_out,
         })
         return Command(update={"task": decision.question, "spent_usd": cost_usd(tokens_in, tokens_out)}, goto=decision.next)
@@ -218,7 +227,7 @@ def build_graph(model: BaseChatModel, checkpointer: BaseCheckpointSaver, tools: 
 
         tokens_in, tokens_out = _tokens(reply)
         write({
-            "stage": "respond", "status": "ok", "detail": f"{model_name(model)} · {tokens_in} in / {tokens_out} out",
+            "stage": "arty", "status": "ok", "detail": f"answer · {model_name(model)} · {tokens_in} in / {tokens_out} out",
             "ms": _ms_since(start), "input_tokens": tokens_in, "output_tokens": tokens_out,
         })
         return {"messages": [reply], "spent_usd": cost_usd(tokens_in, tokens_out), "answered_by": "respond"}

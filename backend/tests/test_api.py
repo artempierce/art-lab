@@ -80,14 +80,16 @@ def kb_with_policy(tmp_path):
 
 
 def test_general_question_is_answered_directly(client):
-    """guard → supervisor picks "respond" → respond answers → supervisor finishes. Streamed, with cost."""
+    """guard → Arty decides to answer himself → Arty answers → Arty is done. Streamed, with cost.
+    (All three Arty lines come from two nodes, `supervisor` and `respond`; the trace names both "arty".)"""
     events = send(client, "hi")
 
     assert [name for name, _ in events][0] == "start" and events[-1][0] == "done"
     assert answer(events) == "Hello from the fake model."
-    assert stages(events) == [("guard", "ok"), ("supervisor", "ok"), ("respond", "ok"), ("supervisor", "ok")]
+    assert stages(events) == [("guard", "ok"), ("arty", "ok"), ("arty", "ok"), ("arty", "ok")]
     traces = [d for n, d in events if n == "trace"]
-    assert traces[1]["detail"].startswith("→ respond") and traces[3]["detail"] == "finish · answered by respond"
+    assert traces[1]["detail"].startswith("answering myself") and traces[2]["detail"].startswith("answer · ")
+    assert traces[3]["detail"] == "done · answered by Arty"
     assert events[-1][1]["cost_usd"] == 0 and events[-1][1]["sources"] == []
 
 
@@ -98,9 +100,9 @@ def test_knowledge_question_goes_to_rag_agent_with_sources(tmp_path, kb_with_pol
     with TestClient(app) as client:
         events = send(client, "What is our sponsorship disclosure rule?")
 
-        assert stages(events) == [("guard", "ok"), ("supervisor", "ok"), ("tool", "ok"), ("rag_agent", "ok"), ("supervisor", "ok")]
+        assert stages(events) == [("guard", "ok"), ("arty", "ok"), ("tool", "ok"), ("rag_agent", "ok"), ("arty", "ok")]
         traces = [d for n, d in events if n == "trace"]
-        assert traces[1]["detail"].startswith("→ rag_agent")
+        assert traces[1]["detail"].startswith("→ rag_agent") and traces[4]["detail"] == "done · answered by rag_agent"
         assert traces[2]["detail"].startswith("search_knowledge [read-only] · 1 chunks · 1 files")
         assert "[1]" in answer(events) and "first 30 seconds" in answer(events)
 

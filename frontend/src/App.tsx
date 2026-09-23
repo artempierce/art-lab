@@ -21,6 +21,7 @@ import {
   listThreads,
   streamChat,
 } from './api'
+import type { ArtyMood } from './components/Arty'
 import { ChatView } from './components/ChatView'
 import { Sidebar } from './components/Sidebar'
 import { TracePanel } from './components/TracePanel'
@@ -31,6 +32,25 @@ import { TracePanel } from './components/TracePanel'
  * block per Run.
  */
 export type Run = { traceId: string; prompt: string; lines: TraceLine[]; summary?: RunSummary; error?: string }
+
+/**
+ * How Arty should look right now, read from the latest run's trace lines:
+ *   no runs yet                         → idle
+ *   streaming, just routed to rag_agent → searching (the knowledge-base search is running)
+ *   streaming, anything else            → thinking
+ *   finished, the guard blocked it      → blocked
+ *   finished with an answer             → happy
+ */
+function artyMood(runs: Run[], busy: boolean): ArtyMood {
+  const run = runs[runs.length - 1]
+  if (!run) return 'idle'
+  if (busy) {
+    const last = run.lines[run.lines.length - 1]
+    return last?.stage === 'arty' && last.detail.startsWith('→ rag_agent') ? 'searching' : 'thinking'
+  }
+  if (run.lines.some((line) => line.status === 'blocked')) return 'blocked'
+  return run.summary ? 'happy' : 'idle'
+}
 
 const BACKEND_DOWN = "Can't reach the backend. Start it with: cd backend && uv run uvicorn artlab.api:app --port 8000"
 
@@ -144,12 +164,13 @@ export default function App() {
   }
 
   const title = threads.find((t) => t.thread_id === threadId)?.title ?? 'New chat'
+  const mood = artyMood(runs, busy)
 
   // Three columns on wide screens (lg = 1024px and up). Narrower, only the chat shows.
   return (
-    <div className="grid h-full grid-cols-1 lg:grid-cols-[250px_minmax(0,1fr)_380px]">
+    <div className="grid h-full grid-cols-1 lg:grid-cols-[270px_minmax(0,1fr)_380px]">
       <Sidebar threads={threads} error={threadsError} activeId={threadId} onOpen={openThread} onNew={newChat} />
-      <ChatView title={title} messages={messages} busy={busy} onSend={send} />
+      <ChatView title={title} messages={messages} busy={busy} mood={mood} onSend={send} />
       <TracePanel runs={runs} busy={busy} />
     </div>
   )

@@ -1,46 +1,40 @@
 @import 'tailwindcss';
 @plugin '@tailwindcss/typography';
 
-/* Same palette as docs/design.html. Stage colours: guard amber, agent blue, tool teal, memory violet, human rose. */
+/*
+ * Art Lab's look: flat pastel colour blocks, thick black outlines, "sticker" drop shadows and big
+ * outlined condensed headings — a playful cartoon style, starring Arty (components/Arty.tsx).
+ *
+ * One deliberate visual world, so there is no dark mode: the bright palette IS the design. The trace
+ * panel is the one dark area, like a console.
+ */
 @theme {
-  --font-sans: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-display: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: 'Nunito', system-ui, -apple-system, 'Segoe UI', sans-serif; /* friendly, readable body text */
+  --font-display: 'Anton', Impact, 'Arial Narrow', sans-serif; /* tall condensed headings */
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace; /* trace panel */
 
-  --color-bg: #f3f5f8;
-  --color-surface: #ffffff;
-  --color-ink: #141820;
-  --color-muted: #596173;
-  --color-rule: #dae0e8;
-  --color-accent: #2b55c9;
-  --color-accent-ink: #ffffff;
-  --color-danger: #ae2250;
+  /* Palette */
+  --color-ink: #121212; /* outlines, text */
+  --color-cream: #fff7e8; /* chat background */
+  --color-sky: #5aa2e8;
+  --color-peri: #86a8f7; /* periwinkle: sidebar, your messages */
+  --color-salmon: #f4878a; /* header, primary buttons */
+  --color-peach: #fdd9a0;
+  --color-blush: #fad5d9;
+  --color-mint: #dcf3ef;
+  --color-navy: #0f1b3d; /* trace panel */
+  --color-navy-2: #1a2a57;
+  --color-muted: #5b5f6b;
+  --color-danger: #c42b43;
 
-  /* The trace panel is terminal-dark in both themes. */
-  --color-term: #0f131a;
-  --color-term-ink: #d5dce6;
-  --color-term-dim: #7c8799;
-  --color-term-rule: #252c38;
-  --color-t-guard: #e6ae52;
-  --color-t-agent: #8ea7f3;
-  --color-t-tool: #55c7b6;
-  --color-t-mem: #b99cf2;
-  --color-t-human: #f2809f;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --color-bg: #0e1116;
-    --color-surface: #151920;
-    --color-ink: #e5e9f0;
-    --color-muted: #9aa3b2;
-    --color-rule: #29303b;
-    --color-accent: #86a1f2;
-    --color-accent-ink: #0e1116;
-    --color-danger: #f2809f;
-    --color-term: #090c11;
-  }
+  /* Trace panel text colours, one per kind of stage (same meaning as in the design book) */
+  --color-term-ink: #f3f0e8;
+  --color-term-dim: #8f9bbd;
+  --color-t-guard: #ffd166; /* guard: checks & limits */
+  --color-t-agent: #a9c1ff; /* Arty */
+  --color-t-rag: #ffb3c8; /* rag_agent */
+  --color-t-tool: #6fe3cc; /* tools */
+  --color-t-human: #ff8fa3; /* blocked / errors */
 }
 
 html,
@@ -51,13 +45,93 @@ body,
 
 body {
   margin: 0;
-  background: var(--color-bg);
+  background: var(--color-cream);
   color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
+/* Big white letters with a black outline and a hard shadow: the headline style. */
+.outlined {
+  font-family: var(--font-display);
+  color: #fff;
+  -webkit-text-stroke: 2px var(--color-ink);
+  paint-order: stroke fill;
+  text-shadow: 3px 3px 0 var(--color-ink);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* A card that looks like a sticker: thick outline, rounded corners, offset hard shadow. */
+.sticker {
+  border: 3px solid var(--color-ink);
+  border-radius: 18px;
+  box-shadow: 4px 4px 0 var(--color-ink);
+}
+
+/* A button that presses in when clicked. */
+.btn-pop {
+  border: 3px solid var(--color-ink);
+  border-radius: 12px;
+  box-shadow: 3px 3px 0 var(--color-ink);
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  transition:
+    transform 80ms ease,
+    box-shadow 80ms ease;
+}
+.btn-pop:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 var(--color-ink);
+}
+.btn-pop:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 var(--color-ink);
+}
+.btn-pop:disabled {
+  opacity: 0.45;
+}
+
+/* The scrolling ticker under the chat header: the text is written twice and slides by half its width. */
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee 28s linear infinite;
+}
+@keyframes marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* Arty's moods that move (see components/Arty.tsx). */
+.arty-bob {
+  animation: arty-bob 1.2s ease-in-out infinite;
+}
+.arty-sway {
+  animation: arty-sway 1s ease-in-out infinite;
+  transform-origin: 50% 90%;
+}
+@keyframes arty-bob {
+  50% {
+    transform: translateY(-5px);
+  }
+}
+@keyframes arty-sway {
+  0%,
+  100% {
+    transform: rotate(-4deg);
+  }
+  50% {
+    transform: rotate(4deg);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .marquee-track,
+  .arty-bob,
+  .arty-sway,
   .animate-pulse {
     animation: none;
   }
