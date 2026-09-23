@@ -1,46 +1,40 @@
 @import 'tailwindcss';
 @plugin '@tailwindcss/typography';
 
-/* Same palette as docs/design.html. Stage colours: guard amber, agent blue, tool teal, memory violet, human rose. */
+/*
+ * Art Lab's look: a calm sage page, huge heavy black headlines, white cards with thin black borders
+ * and a soft grey offset shadow, solid black buttons, a tilted ticker ribbon — and bright retro-gadget
+ * characters, starring Arty (components/Arty.tsx).
+ *
+ * One deliberate visual world, so there is no dark mode. Colour comes from Arty and from the stage
+ * labels in the trace; everything else is sage, white and black.
+ */
 @theme {
-  --font-sans: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-display: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-sans: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif; /* body text: plain and readable */
+  --font-display: 'Bricolage Grotesque', 'Arial Black', system-ui, sans-serif; /* heavy headlines */
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace; /* trace panel */
 
-  --color-bg: #f3f5f8;
-  --color-surface: #ffffff;
-  --color-ink: #141820;
-  --color-muted: #596173;
-  --color-rule: #dae0e8;
-  --color-accent: #2b55c9;
-  --color-accent-ink: #ffffff;
-  --color-danger: #ae2250;
+  /* Page and ink */
+  --color-sage: #d6e1e3; /* page background */
+  --color-paper: #ffffff; /* cards */
+  --color-shade: #b8c5c8; /* the grey offset shadow under cards, buttons and characters */
+  --color-ink: #1b1b1b; /* text, borders, black buttons */
+  --color-muted: #4f5a5d;
 
-  /* The trace panel is terminal-dark in both themes. */
-  --color-term: #0f131a;
-  --color-term-ink: #d5dce6;
-  --color-term-dim: #7c8799;
-  --color-term-rule: #252c38;
-  --color-t-guard: #e6ae52;
-  --color-t-agent: #8ea7f3;
-  --color-t-tool: #55c7b6;
-  --color-t-mem: #b99cf2;
-  --color-t-human: #f2809f;
-}
+  /* Gadget colours (Arty, highlights) */
+  --color-orange: #ffb31a;
+  --color-red: #ec4b2c;
+  --color-sky: #1ea7e1;
+  --color-navy: #2e2c80;
+  --color-green: #1c6b48;
+  --color-danger: #c0341d;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --color-bg: #0e1116;
-    --color-surface: #151920;
-    --color-ink: #e5e9f0;
-    --color-muted: #9aa3b2;
-    --color-rule: #29303b;
-    --color-accent: #86a1f2;
-    --color-accent-ink: #0e1116;
-    --color-danger: #f2809f;
-    --color-term: #090c11;
-  }
+  /* Trace stage colours — dark enough to read on white cards */
+  --color-t-guard: #a4540a; /* guard: checks & limits */
+  --color-t-agent: #2e2c80; /* Arty */
+  --color-t-rag: #c0341d; /* rag_agent */
+  --color-t-tool: #1c6b48; /* tools */
+  --color-t-human: #c0341d; /* blocked / errors */
 }
 
 html,
@@ -51,13 +45,125 @@ body,
 
 body {
   margin: 0;
-  background: var(--color-bg);
+  background: var(--color-sage);
   color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
+/*
+ * Reusable pieces. They live in Tailwind's "components" layer so that utility classes still win:
+ * `class="card bg-ink"` gives a black card, because utilities are applied after components.
+ */
+@layer components {
+/* Heavy, condensed headline type. Bricolage Grotesque is a variable font: `font-stretch` narrows it. */
+.display {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-stretch: 75%;
+  letter-spacing: -0.01em;
+  line-height: 0.92;
+}
+
+/* A white card: thin black border, square-ish corners, soft grey shadow offset down-right. */
+.card {
+  background: var(--color-paper);
+  border: 2px solid var(--color-ink);
+  border-radius: 3px;
+  box-shadow: 6px 6px 0 var(--color-shade);
+}
+
+/* Buttons: solid black, or white with a black outline. Both lift on hover and press in on click. */
+.btn-black,
+.btn-outline {
+  border: 2px solid var(--color-ink);
+  border-radius: 3px;
+  box-shadow: 4px 4px 0 var(--color-shade);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-stretch: 75%;
+  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  transition:
+    transform 80ms ease,
+    box-shadow 80ms ease;
+}
+.btn-black {
+  background: var(--color-ink);
+  color: #fff;
+}
+.btn-outline {
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+.btn-black:hover:not(:disabled),
+.btn-outline:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0 var(--color-shade);
+}
+.btn-black:active:not(:disabled),
+.btn-outline:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: 1px 1px 0 var(--color-shade);
+}
+.btn-black:disabled,
+.btn-outline:disabled {
+  opacity: 0.4;
+}
+
+/* A soft grey offset shadow that follows a character's outline (used on Arty). */
+.friend-shadow {
+  filter: drop-shadow(8px 8px 0 var(--color-shade));
+}
+
+/* The tilted white ribbon with a scrolling ticker, crossing the welcome headline. */
+.ribbon {
+  background: var(--color-paper);
+  border-block: 2px solid var(--color-ink);
+  box-shadow: 0 6px 0 var(--color-shade);
+  transform: rotate(-3deg);
+}
+} /* end @layer components */
+
+/* The ticker text is written twice in a row and slides left by half its width, so it loops seamlessly. */
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee 30s linear infinite;
+}
+@keyframes marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* Arty's moods that move (see components/Arty.tsx). */
+.arty-bob {
+  animation: arty-bob 1.2s ease-in-out infinite;
+}
+.arty-sway {
+  animation: arty-sway 1s ease-in-out infinite;
+  transform-origin: 50% 90%;
+}
+@keyframes arty-bob {
+  50% {
+    transform: translateY(-5px);
+  }
+}
+@keyframes arty-sway {
+  0%,
+  100% {
+    transform: rotate(-4deg);
+  }
+  50% {
+    transform: rotate(4deg);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .marquee-track,
+  .arty-bob,
+  .arty-sway,
   .animate-pulse {
     animation: none;
   }

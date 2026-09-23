@@ -4,6 +4,10 @@ A small multi-agent **web app** built to learn how production AI agents work —
 tools, knowledge bases (RAG), human approval, memory, skills and evals — where **every step runs for
 real and shows itself** in a live trace panel next to the chat.
 
+The main agent is **Arty**, an "interface friend": a little retro computer whose screen shows his face,
+wearing a red beret and carrying a paintbrush. His face shows what the backend is doing: thinking,
+searching the knowledge base, blocked, or happy (with a wink).
+
 > **The idea:** agent architecture is easy to read about and hard to *see*. Diagrams show boxes; they
 > don't show a guard blocking a message, a supervisor picking an agent, or a search pulling the right
 > paragraph out of your documents. Art Lab is one app where each of those happens in front of you,
@@ -33,6 +37,7 @@ real and shows itself** in a live trace panel next to the chat.
 | `evals/rag_golden.yaml` | Golden questions: 10 the knowledge base answers, 2 it can't |
 | `backend/tests/` | 64 tests on the fake model and local embeddings — no API calls, $0 |
 | `frontend/src/` | React app: chat list, chat (with Sources), live trace panel |
+| `frontend/src/components/Arty.tsx` | Arty, drawn as an SVG with five moods (idle, thinking, searching, happy, blocked) |
 | `.env.example` | Settings template: API keys, LangSmith, fake-model switch |
 
 ---
@@ -46,7 +51,7 @@ What happens when you ask *"Who needs to approve a $900 equipment purchase?"*:
 3. **`api.py → chat()`** makes a **trace ID** (this run) and uses the **thread ID** (this chat), then runs the graph.
 4. The **checkpointer** loads the chat's earlier messages from SQLite, and your message is appended.
 5. **`graph.py → guard`** runs **`check_input()`**: size → injection rules → budget. Blocked? A refusal, the run ends, no model is called.
-6. **`graph.py → supervisor`** (the *main agent*) asks the model for a **`RouteDecision`**: `rag_agent` (our policies and docs) or `respond` (everything else), with a reason and the question rewritten to stand alone.
+6. **`graph.py → supervisor`** — **Arty**, the *main agent* — asks the model for a **`RouteDecision`**: `rag_agent` (our policies and docs) or `respond` (everything else), with a reason and the question rewritten to stand alone.
 7. **`graph.py → rag_agent`** calls **`search_knowledge`** through the **tool registry** (only rag_agent may). Search embeds the question locally, asks Chroma for the closest chunks, drops weak matches and flagged chunks, and returns the top 4 — each **wrapped as untrusted**.
 8. rag_agent asks the model to answer **only from those sources**, citing `[1] [2]`; nothing relevant → "I couldn't find that in the knowledge base", with no model call. The sources are attached to the reply.
 9. Back at the **supervisor**: someone answered, so it finishes (no model call).
@@ -141,7 +146,7 @@ Each phase ends **working, visible in the trace panel, tested, and documented**.
 | **State** | What the graph remembers about one chat: `messages`, `spent_usd`, `task`, `answered_by`. |
 | **Reducer** | The rule for merging a node's changes into state. `messages` appends; `spent_usd` adds. |
 | **Checkpointer** | Saves the state after every node. Here: SQLite, so chats survive restarts. |
-| **Supervisor** | The main agent: decides which agent answers each message, and finishes when one has. |
+| **Arty (supervisor)** | The main agent: decides who answers each message (himself or rag_agent), and finishes when one has. Shown as `arty` in the trace. |
 | **Structured output** | The model fills in a fixed form (`RouteDecision`) that code validates, instead of free text. |
 | **RAG** | Retrieval-augmented generation: search your documents first, then answer only from what was found. |
 | **Chunk** | A ~800-character piece of a document. We search chunks, so answers get just the relevant part. |
@@ -187,6 +192,6 @@ art-lab/
 │       ├── api.ts                # Backend client + stream reader
 │       ├── App.tsx               # Page state + three-pane layout
 │       ├── index.css             # Theme: colours, fonts (Geist), dark mode
-│       └── components/           # Sidebar · ChatView (+ Sources) · TracePanel
+│       └── components/           # Arty (the character) · Sidebar · ChatView (+ Sources) · TracePanel
 └── data/                         # git-ignored: chats (artlab.db), knowledge base (chroma/), embedding model (models/)
 ```
