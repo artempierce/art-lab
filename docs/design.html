@@ -155,7 +155,8 @@ html{scroll-behavior:smooth}
     <span class="pill done">Phase 5 ✓</span>
     <span class="pill done">Phase 6 ✓</span>
     <span class="pill done">Phase 7 ✓</span>
-    <span class="pill"><b>Next:</b> Phase 8 — skills</span>
+    <span class="pill done">Phase 8 ✓</span>
+    <span class="pill"><b>Next:</b> Phase 9 — handoffs</span>
         <span class="pill done">all 18 decisions resolved</span>
   </div>
 </header>
@@ -833,7 +834,7 @@ flowchart LR
       <tr><td class="id">5</td><td>Worker agents with bounded tool loops (same pattern as rag_agent) <span class="tag s-tool">done</span></td><td>Each worker answers using its tools</td><td class="id">W1 · S1 S4</td></tr>
       <tr><td class="id">6</td><td>Approve / Reject for mutating tools <span class="tag s-tool">done</span></td><td>save_ideas runs only after Approve</td><td class="id">W3 · S3</td></tr>
       <tr><td class="id">7</td><td>Long-term memory and summarizing (reuses Phase 2's embeddings and Chroma) <span class="tag s-tool">done</span></td><td>Facts recalled in a new chat</td><td class="id">W7 · S8</td></tr>
-      <tr><td class="id">8</td><td>Skills loaded on demand</td><td>Trace shows a load only when needed</td><td class="id">W8 · S9</td></tr>
+      <tr><td class="id">8</td><td>Skills loaded on demand <span class="tag s-tool">done</span></td><td>Trace shows a load only when needed</td><td class="id">W8 · S9</td></tr>
       <tr><td class="id">9</td><td>Agent handoffs through artifacts</td><td>Research → ideas → polish end to end</td><td class="id">W2 · S2</td></tr>
       <tr><td class="id">9b</td><td>Agent calls agent, generalized (Phase 2 did it once: main agent → rag_agent)</td><td>Ideator calls researcher at depth 1</td><td class="id">W10</td></tr>
       <tr><td class="id">10</td><td>Output guard, token and time caps</td><td>Cap tests pass</td><td class="id">FR-5 FR-12</td></tr>
@@ -874,6 +875,7 @@ flowchart LR
       <tr><td class="id">Q17</td><td>Is "treat outside data as untrusted" a tool agents call, or built in?</td><td><b>Built in</b>, enforced by deterministic code at every boundary (the tool gateway, ingest, memory recall), never an agent's choice — an injection's job is to change the model's choices. Plus taint tracking: a run that read untrusted content loses data-changing tools. See docs/execution-plan.md § 4a.</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">Q18</td><td>In a tainted chat, what happens when an agent asks to save or change something?</td><td><b>Ask, with a warning</b>: the Approve/Reject card says the chat read untrusted content and from where (e.g. query_youtube_trends). Nothing runs without the click. Replaces 'tainted chats refuse data-changing tools'. Decided 2026-09-24.</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">Q19</td><td>When should Arty save a fact to long-term memory?</td><td><b>Automatically, from your words only</b>: after each turn a small extraction step reads only your own message (never tool output or documents, so a poisoned page can't plant a memory) and saves durable facts; flagged messages are skipped. Decided 2026-09-24.</td><td><span class="tag s-tool">resolved</span></td></tr>
+      <tr><td class="id">Q20</td><td>In a multi-step request (research → ideas → polish), who decides which agent goes next?</td><td><b>The supervisor plans upfront</b>: Arty reads the request once and writes a short plan (shown in the trace); code runs the steps in order, passing each step's artifact to the next. One routing call, predictable, easy to cap. Decided 2026-09-24.</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">D1</td><td>Project name</td><td><code>art-lab</code> (was agent-lab)</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">D2</td><td>Architecture baseline</td><td>The manifest, with its 6 design bugs fixed during the build</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">D3</td><td>Agent vs skill</td><td>Tools, several steps or own context → agent; know-how → skill</td><td><span class="tag s-tool">resolved</span></td></tr>

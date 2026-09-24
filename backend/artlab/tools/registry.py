@@ -43,6 +43,7 @@ from pydantic import create_model
 
 from artlab.guards.input import find_injection
 from artlab.rag.ingest import DOCUMENT_SKIP_RULES
+from artlab.skills.loader import Skill
 from artlab.tools.untrusted import Piece, escape_tags, wrap_untrusted
 
 Tier = Literal["read_only", "mutating"]
@@ -158,8 +159,14 @@ def scan_pieces(pieces: list[Piece]) -> bool:
 class ToolRegistry:
     """Holds the app's tools, enforces who may call which, and wraps what they return."""
 
-    def __init__(self) -> None:
+    def __init__(self, skills: dict[str, Skill] | None = None) -> None:
+        """`skills` (Phase 8, docs/contracts.md § 12) is every loaded skill, keyed by name — the
+        gateway itself never reads it (`load_skill` runs like any other registered tool); it's kept
+        here purely so `agents/tool_loop.py` has one place to find the skills index for a prompt,
+        without a second thing threaded through every worker. `{}` for a registry with no skills at
+        all — every test registry that doesn't pass one."""
         self._tools: dict[str, Tool] = {}
+        self.skills: dict[str, Skill] = skills or {}
 
     def register(
         self,
@@ -276,14 +283,18 @@ class ToolRegistry:
             error=error, attempts=2,
         )
 
-    async def call(self, agent: str, name: str, *, tainted: bool = False, **args: Any) -> ToolResult:
-        """Run tool `name` on behalf of `agent` (steps 1–5 in the file header).
+    async def call(self, agent: str, tool_name: str, *, tainted: bool = False, **args: Any) -> ToolResult:
+        """Run tool `tool_name` on behalf of `agent` (steps 1–5 in the file header).
 
         Args:
-            agent:    the calling agent's name, checked against the tool's allow-list
-            name:     the tool to run
-            tainted:  the chat's `tainted` flag, passed through to `check` (see its docstring)
-            **args:   the tool's own arguments
+            agent:      the calling agent's name, checked against the tool's allow-list
+            tool_name:  the tool to run — named `tool_name`, not `name`, so a tool whose own argument
+                        is literally called "name" (Phase 8's `load_skill(name: str)`,
+                        docs/contracts.md § 12) can still reach `**args` without colliding with this
+                        parameter; every other call site here passes it positionally, so this rename
+                        changes nothing for them
+            tainted:    the chat's `tainted` flag, passed through to `check` (see its docstring)
+            **args:     the tool's own arguments
 
         Raises ToolDenied (or its subclass ApprovalRequired, for a mutating tool) if the checks fail —
         a refusal is a decision, not a failure, so it is never retried (see `check`). Anything the tool
@@ -293,8 +304,8 @@ class ToolRegistry:
             result.data.hits   → the hits, for our code        result.text → wrapped, for the model
         """
         # 1. Check.
-        tool = self.check(agent, name, tainted)
-        return await self._run(name, tool, args)
+        tool = self.check(agent, tool_name, tainted)
+        return await self._run(tool_name, tool, args)
 
     async def run_approved(self, agent: str, name: str, args: dict[str, Any]) -> ToolResult:
         """Run a mutating tool for real, after your Approve click (Phase 6, docs/contracts.md § 10).

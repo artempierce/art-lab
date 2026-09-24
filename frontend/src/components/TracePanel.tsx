@@ -29,6 +29,7 @@ const STAGE_COLOR: Record<string, string> = {
   content_ideator: 'text-t-ideas',
   english_coach: 'text-t-coach',
   memory: 'text-t-memory', // Phase 7: recall, remember and summarize lines
+  skill: 'text-t-skill', // Phase 8: a load_skill call, kept apart from the generic "tool" colour
 }
 
 // Status → icon at the start of the line. Unknown statuses get a plain dot.

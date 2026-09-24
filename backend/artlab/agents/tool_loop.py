@@ -29,6 +29,7 @@ from langgraph.config import get_stream_writer
 
 from artlab.agents.common import ms_since, tokens_used
 from artlab.model import cost_usd, model_name
+from artlab.skills.loader import skills_index
 from artlab.tools.registry import ApprovalRequired, ToolDenied, ToolRegistry
 
 # The cap from docs/contracts.md § 9: at most this many tools may actually run in one turn, however
@@ -127,8 +128,8 @@ async def run_tool_loop(
     Steps (docs/contracts.md § 9):
         1. Look up `agent`'s tools and bind them to the model — or use the model unbound if it has
            none, so a tool-less worker is still just one model call through this same loop.
-        2. Build the message list: the system prompt (+ TOOL_RULES), then `history` if given, then the
-           task.
+        2. Build the message list: the system prompt (+ TOOL_RULES, + the skills index if `agent` may
+           use load_skill — Phase 8, docs/contracts.md § 12), then `history` if given, then the task.
         3. Call the model. No tool calls in the reply → that's the final answer, done. Otherwise, for
            each tool the model asked for, in order: stop early with a "budget used up" `ToolMessage`
            once MAX_TOOL_CALLS have already run; otherwise check it through the gateway, which may ask
@@ -149,6 +150,10 @@ async def run_tool_loop(
     — no more model calls, so the arguments recorded in `LoopResult.pending` are exactly what the model
     asked for, not what a fresh call might ask for on resume (that's why the *approval node*, not this
     loop, is what re-runs on a resume — see graph.py).
+
+    Skills (docs/contracts.md § 12): a `load_skill` call gets its own trace stage ("skill" instead of
+    "tool") and never taints the chat — it's registered with `untrusted_output=False` (tools/catalog.py)
+    because a skill is our own reviewed repo text, not outside data.
     """
     write = get_stream_writer()
 
@@ -157,7 +162,15 @@ async def run_tool_loop(
     bound_model = model.bind_tools(specs) if specs else model
 
     # 2. The messages every call in this loop builds on: system rules, optional history, then the task.
-    messages: list[BaseMessage] = [SystemMessage(system_prompt + TOOL_RULES), *(history or []), HumanMessage(task)]
+    # Phase 8 (docs/contracts.md § 12): an agent allowed to use load_skill also gets the skills
+    # index — every loaded skill's name and one-line description, never the full body — so it knows
+    # what it *could* load before deciding whether this task needs it. An agent without load_skill
+    # (e.g. rag_agent, which doesn't run through this loop at all, or a worker never granted it) never
+    # sees this block at all.
+    full_prompt = system_prompt + TOOL_RULES
+    if any(tool.name == "load_skill" for tool in tools.tools_for(agent)):
+        full_prompt += "\n\n" + skills_index(tools.skills)
+    messages: list[BaseMessage] = [SystemMessage(full_prompt), *(history or []), HumanMessage(task)]
 
     spent_usd = 0.0
     tainted_so_far = False
@@ -260,7 +273,17 @@ async def run_tool_loop(
             if result.untrusted and name not in taint_sources_so_far:
                 taint_sources_so_far.append(name)
             messages.append(ToolMessage(result.text, tool_call_id=call_id))
-            detail = f"{name} [{tool.tier.replace('_', '-')}] · {'ok' if result.ok else 'failed'} · {result.attempts}"
-            if result.flagged:
-                detail += " · flagged"
-            write({"stage": "tool", "status": "ok" if result.ok else "error", "detail": detail, "ms": ms_since(start)})
+            if name == "load_skill":
+                # Phase 8 (docs/contracts.md § 12): its own trace stage — "the agent reached for
+                # know-how" reads differently from an ordinary tool call — naming which skill it got,
+                # or that the name didn't match one of the loaded skills (tools/skills.py's own
+                # "No skill named …" text is what `unknown` below checks for).
+                skill_name = args.get("name")
+                unknown = isinstance(result.data, str) and result.data.startswith("No skill named")
+                detail = f"unknown skill {skill_name!r}" if unknown else f"loaded {skill_name}"
+                write({"stage": "skill", "status": "ok" if result.ok else "error", "detail": detail, "ms": ms_since(start)})
+            else:
+                detail = f"{name} [{tool.tier.replace('_', '-')}] · {'ok' if result.ok else 'failed'} · {result.attempts}"
+                if result.flagged:
+                    detail += " · flagged"
+                write({"stage": "tool", "status": "ok" if result.ok else "error", "detail": detail, "ms": ms_since(start)})

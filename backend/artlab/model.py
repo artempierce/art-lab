@@ -62,10 +62,21 @@ CONTENT_IDEATOR_HINTS = re.compile(r"\b(ideas?|hooks?|outline|brainstorm)\b", re
 FACTS_PATTERN = re.compile(r"\bmy (\w+(?: \w+)?) is ([^.,!?]+)", re.IGNORECASE)
 
 # Phase 6 (docs/contracts.md § 10): which of `run_tool_loop`'s tools the fake model only calls when the
-# task actually mentions it — everything else keeps § 9's old "always call the first tool" behaviour.
-# Without this, content_ideator's save_ideas (its only tool so far) would get "called" on every single
-# turn, including "give me 3 ideas", which never asks to save anything.
+# task actually mentions it — a tool with no entry here keeps § 9's old "always call it" behaviour.
+# Without this, content_ideator's save_ideas would get "called" on every single turn, including "give
+# me 3 ideas", which never asks to save anything. Phase 8 (§ 12) made `_reply_with_tools` walk every
+# bound tool in order instead of only ever looking at the first one, so a worker whose first tool's
+# hint doesn't match (save_ideas) can still fall through to a later one that does (load_skill, below).
 FAKE_TOOL_HINTS: dict[str, re.Pattern] = {"save_ideas": re.compile(r"\bsave\b", re.IGNORECASE)}
+
+# Phase 8 (docs/contracts.md § 12): a crude stand-in for the model recognising which skill a task
+# needs, since the fake can't read a loaded skill's own description the way a real model would. The
+# fake's load_skill call only fires when one of these patterns matches the task; the first match's
+# skill name becomes the `name` argument — no match means "don't load anything", the same as any other
+# FAKE_TOOL_HINTS miss. Only hook-formulas is exercised by the app's own scenarios (S9) today.
+FAKE_SKILL_HINTS: tuple[tuple[str, re.Pattern], ...] = (
+    ("hook-formulas", re.compile(r"\bhooks?\b", re.IGNORECASE)),
+)
 
 # The fake router's whole decision table, checked top to bottom (docs/contracts.md § 9, T10): the
 # first pattern that matches the question *and* whose route is actually allowed by the schema wins.
@@ -153,9 +164,10 @@ class FakeChatModel(BaseChatModel):
                        before "is", spaces turned to underscores; value = the rest, stripped); no
                        match gives an empty list, same as a real model finding nothing to remember
       tool loop        when bound to a *real* tool list (docs/contracts.md § 9, run_tool_loop): it
-                       calls the first tool, then answers quoting its result — see `_reply_with_tools`.
-                       From Phase 6, a tool named in FAKE_TOOL_HINTS is only called when the task
-                       mentions it (§ 10) — otherwise it answers directly, like a tool-less worker
+                       walks the bound tools in order and calls the first one the task actually wants
+                       (FAKE_TOOL_HINTS' plain keyword match, or FAKE_SKILL_HINTS for load_skill,
+                       §§ 10, 12), then answers quoting its result — see `_reply_with_tools`. Nothing
+                       wants the task → it answers directly, like a tool-less worker
       respond          otherwise, it answers with the next of `replies`, in a loop
 
     How structured output works (and why `bind_tools` is here): LangChain's `with_structured_output(Schema)`
@@ -189,30 +201,49 @@ class FakeChatModel(BaseChatModel):
         return self.model_copy(update={"tool_specs": tools})
 
     def _reply_with_tools(self, messages: list[BaseMessage]) -> AIMessage:
-        """The fake's `run_tool_loop` behaviour (docs/contracts.md § 9), for a real tool list.
+        """The fake's `run_tool_loop` behaviour (docs/contracts.md §§ 9, 12), for a real tool list.
 
         If the last message is already a `ToolMessage` (a tool has just answered), quote the start of
-        it as the final answer — proving a real tool result reached the model, for $0. Otherwise call
-        the *first* bound tool, filling every required string argument with the task text (the last
-        `HumanMessage`): the fake doesn't know what a good argument looks like, but this is deterministic
-        and drives `run_tool_loop` through one real tool call before it answers.
+        it as the final answer — proving a real tool result reached the model, for $0. Otherwise walk
+        `tool_specs` in order and call the first one this task actually wants:
 
-        Phase 6 exception (FAKE_TOOL_HINTS, docs/contracts.md § 10): if that first tool's name is in
-        FAKE_TOOL_HINTS, it's only called when its hint pattern matches the task — otherwise this
-        behaves exactly as if no tools were bound, and the model just answers with `replies`.
+          * `load_skill` (Phase 8, § 12) is special: its argument is filled from FAKE_SKILL_HINTS, not
+            the task text — the fake can't read a skill's own description the way a real model would,
+            so this stands in for "the model recognised this task needs the hook-formulas skill". No
+            pattern matches → this tool doesn't want the task either, same as a hint miss below.
+          * any other tool named in FAKE_TOOL_HINTS only wants the task when its pattern matches it
+            (docs/contracts.md § 10) — a miss moves on to the *next* spec instead of giving up, which is
+            what lets a worker with two hinted tools (content_ideator's save_ideas and load_skill) still
+            reach whichever one actually fits.
+          * a tool with no hint at all is called unconditionally, filling every required string
+            argument with the task text — the fake doesn't know what a good argument looks like, but
+            this is deterministic and drives `run_tool_loop` through one real tool call before it
+            answers, the same as every tool did before FAKE_TOOL_HINTS existed.
+
+        No spec left that wants this task → this behaves exactly as if no tools were bound, and the
+        model just answers with `replies`.
         """
         if messages and isinstance(messages[-1], ToolMessage):
             start = str(messages[-1].content)[:200]
             return AIMessage(f"(Fake model, no API call.) The tool said: {start}")
 
         task = next(m.content for m in reversed(messages) if isinstance(m, HumanMessage))
-        spec = self.tool_specs[0]["function"]
-        hint = FAKE_TOOL_HINTS.get(spec["name"])
-        if hint is not None and not hint.search(task):
-            return AIMessage(self.replies[next(self._turn) % len(self.replies)])
-        params = spec["parameters"]
-        args = {n: task for n in params.get("required", []) if params["properties"][n].get("type") == "string"}
-        return AIMessage("", tool_calls=[{"name": spec["name"], "args": args, "id": "fake-call", "type": "tool_call"}])
+        for spec in self.tool_specs:
+            function = spec["function"]
+            name = function["name"]
+            if name == "load_skill":
+                skill = next((s for s, pattern in FAKE_SKILL_HINTS if pattern.search(task)), None)
+                if skill is None:
+                    continue
+                args = {"name": skill}
+            else:
+                hint = FAKE_TOOL_HINTS.get(name)
+                if hint is not None and not hint.search(task):
+                    continue
+                params = function["parameters"]
+                args = {n: task for n in params.get("required", []) if params["properties"][n].get("type") == "string"}
+            return AIMessage("", tool_calls=[{"name": name, "args": args, "id": "fake-call", "type": "tool_call"}])
+        return AIMessage(self.replies[next(self._turn) % len(self.replies)])
 
     def _reply(self, messages: list[BaseMessage]) -> AIMessage:
         """Decide what to say, based on which role we're playing (see the class docstring)."""

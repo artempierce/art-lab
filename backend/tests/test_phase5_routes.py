@@ -170,12 +170,13 @@ def test_sponsorship_policy_question_still_routes_to_rag_agent(tmp_path):
 
 def test_get_agents_lists_every_phase5_worker_with_its_real_tools(tmp_path):
     """GET /api/agents (the sidebar's Team panel, X3) must list Arty, rag_agent and the three Phase 5
-    workers, each with its real tools: youtube_researcher gets both YouTube stubs, read-only;
-    content_ideator gets its Phase 6 save_ideas, mutating; english_coach still has none.
+    workers, each with its real tools: youtube_researcher gets both YouTube stubs plus load_skill, all
+    read-only; content_ideator gets its Phase 6 save_ideas (mutating) plus load_skill (read-only);
+    english_coach gets only load_skill.
 
-    Updated for Phase 6 (docs/contracts.md § 10): content_ideator used to have no tools at all — it
-    now has save_ideas, so this checks its tier shows as "changes data" instead of asserting an empty
-    list."""
+    Updated for Phase 8 (docs/contracts.md § 12): all three workers are now on load_skill's allow-list,
+    so english_coach's tools list is no longer empty, and the other two gain one read-only entry each —
+    on top of Phase 6's update, which gave content_ideator save_ideas in the first place."""
     app = create_app(
         model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path),
         ideas_dir=tmp_path / "ideas", memory=empty_memory(tmp_path),
@@ -188,14 +189,18 @@ def test_get_agents_lists_every_phase5_worker_with_its_real_tools(tmp_path):
     ]
 
     researcher = next(e for e in body if e["name"] == "youtube_researcher")
-    assert {t["name"] for t in researcher["tools"]} == {"query_youtube_trends", "fetch_comments"}
+    assert {t["name"] for t in researcher["tools"]} == {"query_youtube_trends", "fetch_comments", "load_skill"}
     assert all(t["tier"] == "read-only" for t in researcher["tools"])
 
     ideator = next(e for e in body if e["name"] == "content_ideator")
     coach = next(e for e in body if e["name"] == "english_coach")
-    assert {t["name"] for t in ideator["tools"]} == {"save_ideas"}
-    assert all(t["tier"] == "changes data" for t in ideator["tools"])
-    assert coach["tools"] == []
+    assert {t["name"] for t in ideator["tools"]} == {"save_ideas", "load_skill"}
+    assert {t["tier"] for t in ideator["tools"] if t["name"] == "save_ideas"} == {"changes data"}
+    assert {t["tier"] for t in ideator["tools"] if t["name"] == "load_skill"} == {"read-only"}
+    assert coach["tools"] == [{
+        "name": "load_skill", "tier": "read-only",
+        "description": "Load a skill's full instructions by name, when the task needs know-how beyond what's already in your prompt.",
+    }]
 
 
 def test_fake_router_never_picks_a_route_the_schema_disallows(tmp_path):

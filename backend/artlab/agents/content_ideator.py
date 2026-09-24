@@ -10,10 +10,10 @@ In Phase 5 the registry had no tools for this agent, so a turn was exactly one m
 `run_tool_loop`'s own behaviour for a tool-less worker (§ 9). Phase 6 registers its first tool,
 `save_ideas` (tools/catalog.py) — a mutating tool, so the model can *ask* for it but it never just
 runs: `run_tool_loop` catches the gateway's `ApprovalRequired` and this worker passes the resulting
-`pending_approval` request on, unchanged, in its own state update. Phase 8 adds a second tool,
-`load_skill`, so it can pull in a whole skill (like backend/skills/hook-formulas/SKILL.md) instead of
-relying on the handful of hook patterns folded into PROMPT below — this file won't need to change
-for that either.
+`pending_approval` request on, unchanged, in its own state update. Phase 8 (docs/contracts.md § 12) adds a second tool, `load_skill`: the hook patterns that used to be
+folded into PROMPT below as a stand-in now live in backend/skills/hook-formulas/SKILL.md instead, and
+the model reaches for them itself when a task needs them — this file still didn't need to change for
+that, the same as it didn't for save_ideas.
 """
 
 from langchain_core.language_models import BaseChatModel
@@ -31,9 +31,10 @@ NAME = "content_ideator"
 # back-and-forth, not the model's whole memory; a real Claude call still pays for every token it reads.
 HISTORY_MESSAGES = 4
 
-# The studio's idea specialist. Four patterns from backend/skills/hook-formulas/SKILL.md are folded in
-# directly here, because Phase 5 has no way to load a skill yet (that's `load_skill`, Phase 8) — this is
-# a stand-in for that file, not a copy of it.
+# The studio's idea specialist. The hook patterns that used to be folded in here directly (Phase 5,
+# before a worker could load a skill) now live in backend/skills/hook-formulas/SKILL.md — PROMPT just
+# tells the model that skill exists; run_tool_loop is what actually shows it the name and description
+# (docs/contracts.md § 12), and the model calls load_skill itself when a task needs the real patterns.
 PROMPT = """You are content_ideator, Art Lab's video idea specialist for a YouTube creator's studio.
 
 Give EXACTLY 3 video ideas. For each one, give:
@@ -47,12 +48,8 @@ Rules:
 - If the request includes research (comments, trends, a past video's numbers), build the ideas on it —
   don't ignore it and fall back to generic suggestions.
 - Be concise and specific; "make a video about X" is not an idea.
-
-Reach for these hook patterns when they fit (there are more, but these four cover most requests):
-  - The Problem Hook: name a pain point the audience has, then hint at the fix.
-  - The Counter-Intuitive Flip: contradict a common belief in the niche, then promise the real story.
-  - The List Hook: promise a specific, bounded list and name the first item right away.
-  - The Direct Question Hook: ask the one question that nails the viewer's exact situation."""
+- If the task is about hooks specifically, or your own general sense of a good hook feels thin, load
+  the hook-formulas skill with load_skill before you answer."""
 
 
 def make_node(model: BaseChatModel, tools: ToolRegistry):

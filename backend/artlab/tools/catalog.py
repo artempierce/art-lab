@@ -6,27 +6,38 @@ tools/catalog.py — every tool in the app, its risk tier, and which agents may 
     query_youtube_trends  read-only   youtube_researcher  fake trending-videos search (stub, T2)
     fetch_comments        read-only   youtube_researcher  fake comments for a video (stub, T2)
     save_ideas            mutating    content_ideator     write the ideas you just gave to a dated file (Phase 6)
+    load_skill            read-only   youtube_researcher, content_ideator, english_coach
+                                       pull a whole skill's text into this turn, by name (Phase 8)
 
-Later phases add more tools here (load_skill, …), each with its own allow-list.
+Later phases add more tools here, each with its own allow-list.
 """
 
 from pathlib import Path
 
 from artlab.config import IDEAS_DIR
 from artlab.rag.knowledge import KnowledgeBase
+from artlab.skills.loader import Skill, load_skills
 from artlab.tools.ideas import make_save_ideas
 from artlab.tools.registry import ToolRegistry
+from artlab.tools.skills import make_load_skill
 from artlab.tools.stubs import fetch_comments, query_youtube_trends
 
 
-def build_tools(knowledge: KnowledgeBase, ideas_dir: Path = IDEAS_DIR) -> ToolRegistry:
+def build_tools(
+    knowledge: KnowledgeBase, ideas_dir: Path = IDEAS_DIR, skills: dict[str, Skill] | None = None
+) -> ToolRegistry:
     """Create the registry with every tool, wired to the given knowledge base.
 
     `ideas_dir` is where `save_ideas` writes (docs/contracts.md § 10). The real app never passes it —
     the default is the real data/ideas folder — but tests point it at a temp folder (via
     `api.create_app(ideas_dir=...)`) so running the suite never touches the repo's own data.
+
+    `skills` is what `load_skill` can hand back (Phase 8, docs/contracts.md § 12); `None` (every real
+    call site) reads the repo's own `backend/skills/` once, via `load_skills()`. Unlike `ideas_dir`,
+    tests use this same real folder too — there's nothing to fake about our own checked-in markdown.
     """
-    tools = ToolRegistry()
+    skills = load_skills() if skills is None else skills
+    tools = ToolRegistry(skills=skills)
     tools.register(
         "search_knowledge",
         knowledge.search,
@@ -60,6 +71,17 @@ def build_tools(knowledge: KnowledgeBase, ideas_dir: Path = IDEAS_DIR) -> ToolRe
         tier="mutating",
         allowed_agents={"content_ideator"},
         description="Save the video ideas you just gave to a dated file in the studio's ideas folder.",
+        untrusted_output=False,
+    )
+    # Phase 8 (docs/contracts.md § 12): every skill-reading worker's window into backend/skills/. Its
+    # output is our own reviewed repo text, not outside data, so untrusted_output=False — loading a
+    # skill never taints the chat.
+    tools.register(
+        "load_skill",
+        make_load_skill(skills),
+        tier="read_only",
+        allowed_agents={"youtube_researcher", "content_ideator", "english_coach"},
+        description="Load a skill's full instructions by name, when the task needs know-how beyond what's already in your prompt.",
         untrusted_output=False,
     )
     return tools
