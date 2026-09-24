@@ -230,7 +230,9 @@ class ToolRegistry:
             )
 
         # Both tries failed: a failed ToolResult instead of raising, so a worker can keep going.
-        text = escape_tags(f"[tool {name} failed: {error}]")  # an exception message can carry outside text
+        # An exception message can carry outside text (an error page echoing the request, say), so for an
+        # untrusted tool the message itself is wrapped like any other result; only our own prefix stays outside.
+        text = f"[tool {name} failed]\n" + (wrap_untrusted(error, name) if tool.untrusted_output else escape_tags(error))
         return ToolResult(
             tool=name, ok=False, data=None, text=text, untrusted=tool.untrusted_output,
             error=error, attempts=2,
