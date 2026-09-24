@@ -40,8 +40,9 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel, Field
 
+from artlab.agents.common import text_of
 from artlab.config import DB_PATH, REPO_ROOT
-from artlab.graph import build_graph, text_of
+from artlab.graph import build_graph
 from artlab.model import cost_usd, make_model
 from artlab.rag.knowledge import KnowledgeBase
 from artlab.tools.catalog import build_tools

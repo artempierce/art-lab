@@ -18,8 +18,8 @@ from langchain_core.embeddings import DeterministicFakeEmbedding
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import Field
 
+from artlab.agents.rag_agent import NOT_FOUND
 from artlab.api import create_app
-from artlab.graph import NOT_FOUND
 from artlab.guards import input as input_guard
 from artlab.guards.input import MAX_INPUT_CHARS
 from artlab.model import FakeChatModel, fake_model
