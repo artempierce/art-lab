@@ -173,6 +173,15 @@ export default function App() {
             approval: { id: e.id, agent: e.agent, tool: e.tool, args: e.args, tainted: e.tainted, taint_sources: e.taint_sources },
           }))
           break
+        case 'replace':
+          // The output guard (Phase 10, contracts.md § 14) checks a turn's answer only after it
+          // has finished, not before each token goes out — checking first would mean holding the
+          // whole reply back and losing the live-typing feel. So the design (design book Q21) is
+          // "stream, then retract": tokens stream to this same bubble as normal, and if the guard
+          // found something bad, this event replaces the bubble's text with the redacted version
+          // once the turn ends. `redacted: true` lets ChatView show a small note about the swap.
+          updateReply((m) => ({ ...m, content: e.text, redacted: true }))
+          break
         case 'done':
           // The totals go to the trace panel; the sources (if rag_agent answered) go under the reply.
           updateLastRun(key, (r) => ({ ...r, summary: e }))

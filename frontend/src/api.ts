@@ -42,6 +42,8 @@ export type Approval = {
  * are the passages rag_agent answered from (empty for other answers). `approval` is attached by an
  * `approval` event and shows the Approve/Reject card (ApprovalCard.tsx); `approvalDecision` is set
  * once you've clicked one of its buttons, so the card can show its outcome and stay disabled.
+ * `redacted` is set by a `replace` event (Phase 10, contracts.md § 14): the output guard swapped
+ * this reply's text after it had already streamed to the page.
  */
 export type Message = {
   role: 'user' | 'assistant'
@@ -50,6 +52,7 @@ export type Message = {
   sources?: Source[]
   approval?: Approval
   approvalDecision?: 'approved' | 'rejected'
+  redacted?: boolean
 }
 
 /** One line in the trace panel, written by a graph node (e.g. stage "guard", status "ok"). */
@@ -64,12 +67,15 @@ export type RunSummary = { input_tokens: number; output_tokens: number; cost_usd
  * Order in a run: start → (trace | token)* → done   — or error instead of done. A run that calls a
  * mutating tool pauses instead: start → (trace | token)* → approval → done (the reply so far is
  * "waiting for your approval"); resuming it with resumeChat below starts the same sequence again.
+ * A run the output guard redacted inserts one more event before done: start → (trace | token)* →
+ * replace → done (contracts.md § 14).
  */
 export type ChatEvent =
   | { type: 'start'; trace_id: string; thread_id: string }
   | ({ type: 'trace' } & TraceLine)
   | { type: 'token'; text: string }
   | ({ type: 'approval' } & Approval)
+  | { type: 'replace'; text: string }
   | ({ type: 'done'; sources: Source[] } & RunSummary)
   | { type: 'error'; message: string }
 
