@@ -34,14 +34,14 @@ searching the knowledge base, blocked, or happy (with a wink).
 | `backend/artlab/guards/` | Guard layer 1 (`input.py`: size, injection rules (including "disable-safety" regex block), per-chat budget; the injection rules also scan documents) and layer 2 (`classifier.py`: a local ONNX prompt-injection classifier — "reduce privileges", not block) |
 | `backend/artlab/model.py` | Real Claude (`claude-haiku-4-5`) or a free fake model; prices and cost formula |
 | `backend/artlab/rag/` | Knowledge base: `ingest.py` (files + web pages → chunks), `web.py` (safe fetch), `embeddings.py` (local, free), `knowledge.py` (Chroma + search) |
-| `backend/artlab/tools/` | Registry (who may call what), tool gateway with per-tool timeout and retry, untrusted wrapper, stub tools, catalog; `save_ideas` (mutating tool, needs approval); `ideas.py` data writer; `load_skill` (reads skill text on demand) |
+| `backend/artlab/tools/` | Registry (who may call what), tool gateway with per-tool timeout and retry, untrusted wrapper, stub tools, catalog; `agents.py` (agent-call tools like `ask_youtube_researcher`); `save_ideas` (mutating tool, needs approval); `ideas.py` data writer; `load_skill` (reads skill text on demand) |
 | `backend/artlab/graph.py` → `approval` node | Approval gate: pauses the run (`interrupt()`) on a recorded data-changing request, and after your click runs exactly the stored arguments |
 | `backend/artlab/config.py` | Where things live on disk |
 | `backend/artlab/memory/` | Long-term memory: `store.py` (Chroma collection "memory", upsert by key), extraction from your words only (never tool output), flagged messages skipped |
 | `backend/skills/` | SKILL.md files: retention-analysis, hook-formulas, style-guide. Read at startup by `backend/artlab/skills/loader.py`; agents see only names and descriptions, and load the full text on demand with `load_skill` |
 | `knowledge/` | Sample documents to search: 6 fictional studio policies + a poisoned test note |
 | `evals/` | Golden question sets: routing, rag, youtube_researcher, content_ideator, english_coach; eval runners |
-| `backend/tests/` | 204 tests on the fake model and local embeddings — no API calls, $0 |
+| `backend/tests/` | 216 tests on the fake model and local embeddings — no API calls, $0 |
 | `frontend/src/` | React app: chat list, chat (with Sources), live trace panel |
 | `frontend/src/components/Arty.tsx` | Arty, drawn as an SVG with five moods (idle, thinking, searching, happy, blocked) |
 | `frontend/src/components/ApprovalCard.tsx` | Phase 6: Approve / Reject card for mutating tools; shows taint warning and what the tool will do |
@@ -61,7 +61,7 @@ What happens when you ask *"Who needs to approve a $900 equipment purchase?"*:
 5. **`agents/guard.py`** runs **`check_input()`**: size → injection rules → budget. Blocked? A refusal, the run ends, no model is called. Passed? The local injection **classifier** (`guards/classifier.py`, if it's been downloaded) scores the message; at or above threshold, the chat is marked **tainted** — the message still gets answered, but data-changing tools are refused in this chat from then on.
 5b. **`agents/summarize.py`**: if the chat has 30+ messages, fold all but the last 10 into one summary. Trimmed `messages` go to the supervisor.
 5c. **`agents/recall.py`**: load up to 12 facts from long-term memory (`memory/store.py`, filtered by owner), wrapped as untrusted and read-only.
-6. **`agents/supervisor.py`** — **Arty**, the *main agent* — asks the model for a **`RouteDecision`**: a worker (e.g. `rag_agent`, `youtube_researcher`, `content_ideator`, `english_coach`) or direct `respond`, with a reason and the question rewritten to stand alone. The route comes from the **worker registry** in `agents/workers.py`. Step counting starts (max 5 steps).
+6. **`agents/supervisor.py`** — **Arty**, the *main agent* — asks the model for a **`RouteDecision`**: a plan of up to 3 steps (e.g. youtube_researcher → content_ideator → english_coach), with each step's answer passed to the next as an untrusted artifact. Arty can also call another agent nested (Phase 9b, via `ask_youtube_researcher` in `tools/agents.py`), and the cost is shared. The route comes from the **worker registry** in `agents/workers.py`. Step counting starts (max 5 steps).
 7. The chosen **worker** calls **`agents/tool_loop.py`** if it needs tools. The tool loop lets the model pick from its allowed tools (max 3 requests per turn, including refused requests), runs each through the **tool gateway** in `tools/registry.py` (which wraps results as untrusted), and finishes with a forced text answer. Agents see a **skills index** (names + descriptions) in their prompt and can load a skill with `load_skill`.
 7b. **For data-changing tools** (e.g. `save_ideas`): the gateway refuses to run it directly (`ApprovalRequired`); the worker records the request as `pending_approval`, and the **`approval` node** pauses the run with LangGraph's `interrupt()`. The browser gets an `approval` event and shows a card (with a warning if the chat is tainted); your click calls `POST /api/chat/resume`, and only then does the tool run, with exactly the arguments you saw.
 8. Example: **`agents/rag_agent.py`** calls the tool loop to **`search_knowledge`** (only rag_agent may). Search embeds the question locally, asks Chroma for the closest chunks, drops weak matches and flagged chunks, and returns the top 4 — each **wrapped as untrusted** by the gateway. If the first search finds nothing, rag_agent can rephrase and search again (max 2 searches).
@@ -125,7 +125,7 @@ Open http://localhost:5173. Chats are stored in `data/artlab.db` — delete it t
 ## Test
 
 ```bash
-cd backend && uv run pytest       # 171 tests: fake model + local embeddings, no API calls, no cost
+cd backend && uv run pytest       # 216 tests: fake model + local embeddings, no API calls, no cost
                                    # (one test class runs the real classifier and is skipped until it's downloaded)
 cd backend && uv run pytest tests/test_retrieval_eval.py -s   # retrieval report: rank of the right file per golden question
 cd frontend && npm run build      # type-check + production build
@@ -167,7 +167,9 @@ Each phase ends **working, visible in the trace panel, tested, and documented**.
 | 6 | **Approval gate**: data-changing tools pause the graph and show Approve / Reject; tainted chats ask with a warning instead of refusing | ✅ done |
 | 7 | **Long-term memory + summarizing**: automatic extraction ≤3 facts from your words only (after each turn), folding to 1 summary after 30+ messages, recall ≤12 facts after guard | ✅ done |
 | 8 | **Skills**: load_skill tool, skills index in prompts, inlined patterns removed from ideator/coach | ✅ done |
-| 9–13 | Handoffs (planned upfront by supervisor), caps, evals, dashboards | planned |
+| 9 | **Handoffs planned upfront**: supervisor can plan up to 3 steps, each answer passed to the next as untrusted artifact | ✅ done |
+| 9b | **Agent calls agent**: content_ideator can call youtube_researcher nested (depth 1, cost shared) via ask_youtube_researcher | ✅ done |
+| 10–13 | Output guard + caps, evals, dashboards | planned |
 
 ---
 
@@ -224,7 +226,7 @@ art-lab/
 │   │   ├── memory/               # Long-term memory: Chroma collection, extraction and recall
 │   │   └── tools/                # registry, gateway (timeout/retry), untrusted wrapper, stubs, catalog
 │   ├── skills/                   # SKILL.md files for phases 5+: retention-analysis, hook-formulas, style-guide
-│   └── tests/                    # 193 tests: api, guard, agents, tools, RAG, skills, evals, Phase 5 workers
+│   └── tests/                    # 216 tests: api, guard, agents, tools, RAG, skills, evals, Phase 5 workers
 ├── evals/                        # Golden question sets and eval runners: routing, RAG, workers
 ├── frontend/                     # Vite · React · TypeScript · Tailwind
 │   └── src/
