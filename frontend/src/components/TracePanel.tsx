@@ -84,8 +84,8 @@ function RunBlock({ run, running }: { run: Run; running: boolean }) {
           const failed = line.status !== 'ok'
           const color = failed ? 'text-t-human' : (STAGE_COLOR[line.stage] ?? 'text-ink')
           return (
-            // Four columns: icon | stage | detail (wraps if long) | time
-            <li key={i} className="grid grid-cols-[1.4em_6.5em_minmax(0,1fr)_auto] gap-x-2">
+            // Four columns: icon | stage (11em fits the longest name, "youtube_researcher", in mono) | detail (wraps) | time
+            <li key={i} className="grid grid-cols-[1.4em_11em_minmax(0,1fr)_auto] gap-x-2">
               <span className={color}>{STATUS_ICON[line.status] ?? '•'}</span>
               <span className={`font-medium ${color}`}>{line.stage}</span>
               <span className="break-words">{line.detail}</span>
