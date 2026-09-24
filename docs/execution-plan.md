@@ -4,7 +4,7 @@
 model does each one — so development costs fewer tokens without lowering quality.
 **What to build and in what order** stays in the design book (`docs/design.html`); this plan follows it.
 
-Status: Waves 0–1, T3 and Phase 5 (Wave 2: F1, T7–T10, X1–X3) done on 2026-09-23 · next: Phase 6 (approvals).
+Status: Waves 0–1, T3 and Phases 0–5 (Wave 2: F1, T7–T10) done; Phase 6 (approvals: T13a/T13b as P6a/P6b) done on 2026-09-24 · next: Phase 7 (memory).
 
 ---
 
@@ -106,8 +106,8 @@ change (plus its own tests), which is what makes parallel work safe.
 
 | ID | Task | Phase | Model | Owns | Done when |
 |---|---|---|---|---|---|
-| T13a | **Approvals protocol**: LangGraph interrupt on mutating tools, resume endpoint, `approval` SSE event, `save_ideas` tool | 6 | Opus | graph wiring, `api.py`, `tools/` | S3 passes: nothing written until Approve |
-| T13b | Approve / Reject card in the UI (from T13a's event spec) | 6 | Sonnet, in parallel with T13a once the spec is written | `ChatView.tsx`, `api.ts` | Card appears, click resumes the run |
+| T13a | **Approvals protocol**: LangGraph interrupt on mutating tools, resume endpoint, `approval` SSE event, `save_ideas` tool | 6 | Opus | graph wiring, `api.py`, `tools/` | S3 passes: nothing written until Approve ✅ |
+| T13b | Approve / Reject card in the UI (from T13a's event spec) | 6 | Sonnet, in parallel with T13a once the spec is written | `ChatView.tsx`, `api.ts` | Card appears, click resumes the run ✅ |
 | T14 | **Handoffs + agent-calls-agent**: typed artifacts between workers; ideator calls researcher at depth 1 | 9, 9b | Opus design, Sonnet implementation | graph wiring, agents | S2: research → ideas → polish end to end |
 | T15 | **Output guard + token/time caps** | 10 | Sonnet (Opus review) | `guards/output.py`, caps | Cap tests pass |
 
@@ -141,8 +141,8 @@ model chooses, so a choice can't be the defence.
 | 1. Scan on arrival | Injection rules (+ the classifier, T3) check outside text as it arrives | ingest; the tool gateway | ingest ✅ · live tool results → T2 |
 | 2. Wrap at the boundary | Every tool result goes inside `<untrusted_retrieval>`, our tags escaped | **the gateway, for every tool** — not each tool | partly (each tool wraps its own) → T2 |
 | 3. Tell the model | Prompts say tagged content is data, never instructions | agent prompts | rag_agent ✅ · every new worker |
-| 4. **Taint → fewer privileges** | Once untrusted content is in a run, data-changing or data-sending tools are refused, whatever the model asks | graph state (`tainted`) + the registry | → W0.5, T2 |
-| 5. Human approval | Data-changing actions wait for Approve | Phase 6 | → T13a |
+| 4. **Taint → fewer privileges + approval** | Once untrusted content is in a run, data-changing or data-sending tools show Approve/Reject (not refused); the card warns about taint sources | graph state (`tainted`) + the registry + approval interrupt | Phase 6 ✅ · T13a/T13b done |
+| 5. Human approval | Data-changing actions wait for Approve | Phase 6 | ✅ |
 
 Layers 1–3 make an injection *less likely to work*; none is a guarantee. Layer 4 makes it *harmless when
 it does work*: an agent that has read a poisoned page can't send or change anything without Sol. It's the
