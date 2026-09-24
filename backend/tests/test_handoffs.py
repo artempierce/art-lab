@@ -285,3 +285,15 @@ def test_breaker_stops_a_runaway_plan(tmp_path, monkeypatch):
     assert calls == ["A", "B"]  # C never ran: the breaker stopped the plan after step 2
     assert state["messages"][-1].content == supervisor_module.STEP_LIMIT_NOTICE
     assert [t["status"] for t in traces].count("stopped") == 1
+
+
+def test_a_planned_research_step_is_not_repeated_by_the_ideator(tmp_path):
+    """In the S2 plan the researcher runs once, as step 1. The ideator gets that research as its input,
+    so it must not call ask_youtube_researcher again: words inside the passed-in research (e.g.
+    "trending") are not a reason to research twice. A repeat would cost a second, nested research run."""
+    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path), memory=empty_memory(tmp_path))
+    with TestClient(app) as client:
+        lines = trace_lines(send(client, "Find a niche in budget desk gear and give me 3 polished ideas"))
+
+    assert not any("ask_youtube_researcher" in line["detail"] for line in lines)
+    assert sum(line["stage"] == "tool" and "query_youtube_trends" in line["detail"] for line in lines) == 1

@@ -252,6 +252,10 @@ class FakeChatModel(BaseChatModel):
             return AIMessage(f"(Fake model, no API call.) The tool said: {start}")
 
         task = next(m.content for m in reversed(messages) if isinstance(m, HumanMessage))
+        # In a plan (Phase 9), a step's task is "<question>\n\nInput from <agent> (…):\n<artifact>". Match the
+        # hints against the question only: words inside the previous step's output (say, "trending" in the
+        # research) mustn't make the fake call a tool the question never asked for.
+        task = str(task).split("\n\nInput from ", 1)[0]
         for spec in self.tool_specs:
             function = spec["function"]
             name = function["name"]
