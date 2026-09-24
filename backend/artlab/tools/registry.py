@@ -7,15 +7,19 @@ Tenet 2 there: a model only *asks* for an action; our code decides whether it ha
 
 `await tools.call(agent, tool_name, tainted=..., **args)` does, in order:
 
-    1. check   the tool exists
-               the calling agent is on the tool's allow-list        e.g. search_knowledge: rag_agent only
-               the tool is read-only                                tools that change data ("mutating") need
-                                                                    your Approve/Reject click (Phase 6); until
-                                                                    then they are refused outright, and in a
-                                                                    tainted chat they always will be
-    2. run     the tool, in a worker thread (tools are ordinary blocking functions)
-    3. render  its return value as `Piece`s (tools/untrusted.py)
-    4. wrap    every piece in <untrusted_retrieval> if the tool's output is untrusted (the default)
+    1. check    the tool exists
+                the calling agent is on the tool's allow-list        e.g. search_knowledge: rag_agent only
+                the tool is read-only                                tools that change data ("mutating") need
+                                                                     your Approve/Reject click (Phase 6); until
+                                                                     then they are refused outright, and in a
+                                                                     tainted chat they always will be
+    2. run      the tool, in a worker thread, with a per-tool timeout; any exception or timeout from the
+                tool gets one retry, and a second failure comes back as a failed `ToolResult` instead of
+                raising
+    3. render   its return value as `Piece`s (tools/untrusted.py)
+    4. scan     every untrusted piece for known injection phrasings on arrival (guards/input.py); a match
+                sets `flagged=True` — the text is still returned, flagging reports, it doesn't delete
+    5. wrap     every piece in <untrusted_retrieval> if the tool's output is untrusted (the default)
 
 and returns a `ToolResult`: the raw value for our code, and the wrapped text for a model.
 
@@ -26,8 +30,6 @@ text reach a model looking like instructions. Here, a new tool is wrapped withou
 A tool's risk tier, allow-list and untrusted flag are fixed when it is registered. The caller can't pass
 in a lower tier — that was design bug #2 in the original manifest, where the caller chose the tier itself.
 
-Phase 4 (ticket T2) adds: stub tools, a per-tool timeout, one retry, failures returned as a failed
-ToolResult instead of an exception, and an injection scan of every result on arrival.
 Contract: docs/contracts.md § 4.
 """
 
@@ -36,7 +38,9 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
-from artlab.tools.untrusted import Piece, wrap_untrusted
+from artlab.guards.input import find_injection
+from artlab.rag.ingest import DOCUMENT_SKIP_RULES
+from artlab.tools.untrusted import Piece, escape_tags, wrap_untrusted
 
 Tier = Literal["read_only", "mutating"]
 
@@ -55,6 +59,7 @@ class Tool:
     description       one line, for people and for model prompts
     untrusted_output  True if what it returns comes from outside Art Lab (documents, web pages, YouTube…),
                       so the gateway wraps it and the chat becomes tainted. True unless we say otherwise.
+    timeout_s         how long `call` waits before giving up on one try (default 10s)             (T2)
     """
 
     name: str
@@ -63,6 +68,7 @@ class Tool:
     allowed_agents: frozenset[str]
     description: str
     untrusted_output: bool = True
+    timeout_s: float = 10.0
 
 
 @dataclass(frozen=True)
@@ -125,6 +131,20 @@ def render_pieces(pieces: list[Piece], untrusted: bool) -> str:
     return "\n\n".join(blocks)
 
 
+def scan_pieces(pieces: list[Piece]) -> bool:
+    """The arrival scan (T2): True if any piece's text matches a known injection phrasing.
+
+    Runs the same rules the input guard runs on chat messages (guards/input.py), skipping
+    "fake-tags" — the same skip document ingest uses (rag/ingest.py), and for the same reason: the
+    gateway always escapes our tag names before wrapping (tools/untrusted.py), so a piece containing
+    "<untrusted_retrieval>" can't break out and doesn't need flagging just for that.
+
+    A match only sets `ToolResult.flagged`; the text is still wrapped and returned untouched —
+    flagging reports a suspicious result, it doesn't delete it.
+    """
+    return any(find_injection(piece.text, skip=DOCUMENT_SKIP_RULES) for piece in pieces)
+
+
 class ToolRegistry:
     """Holds the app's tools, enforces who may call which, and wraps what they return."""
 
@@ -140,9 +160,10 @@ class ToolRegistry:
         description: str,
         *,
         untrusted_output: bool = True,
+        timeout_s: float = 10.0,
     ) -> None:
-        """Add a tool. Its tier, allow-list and untrusted flag can't be changed by callers later."""
-        self._tools[name] = Tool(name, fn, tier, frozenset(allowed_agents), description, untrusted_output)
+        """Add a tool. Its tier, allow-list, untrusted flag and timeout can't be changed by callers later."""
+        self._tools[name] = Tool(name, fn, tier, frozenset(allowed_agents), description, untrusted_output, timeout_s)
 
     def check(self, agent: str, name: str, tainted: bool = False) -> Tool:
         """Step 1: return the tool if `agent` may run it now, else raise ToolDenied saying why.
@@ -163,7 +184,7 @@ class ToolRegistry:
         return tool
 
     async def call(self, agent: str, name: str, *, tainted: bool = False, **args: Any) -> ToolResult:
-        """Run tool `name` on behalf of `agent` (steps 1–4 in the file header).
+        """Run tool `name` on behalf of `agent` (steps 1–5 in the file header).
 
         Args:
             agent:    the calling agent's name, checked against the tool's allow-list
@@ -171,17 +192,48 @@ class ToolRegistry:
             tainted:  the chat's `tainted` flag; a tainted chat can't run mutating tools
             **args:   the tool's own arguments
 
-        Raises ToolDenied if the checks fail. Example:
+        Raises ToolDenied if the checks fail — a refusal is a decision, not a failure, so it is never
+        retried (see `check`). Anything the tool itself raises, or a timeout, gets one retry (T2); if
+        the second try also fails, this returns a failed `ToolResult` instead of raising. Example:
             result = await tools.call("rag_agent", "search_knowledge", query="sponsor rules")
             result.data.hits   → the hits, for our code        result.text → wrapped, for the model
         """
         # 1. Check.
         tool = self.check(agent, name, tainted)
 
-        # 2. Run. `asyncio.to_thread` runs the blocking function in a worker thread, so the server stays
-        #    free for other requests meanwhile (the knowledge search, for one, briefly uses the CPU).
-        value = await asyncio.to_thread(tool.fn, **args)
+        # 2. Run, with one retry (T2). `asyncio.to_thread` runs the blocking function in a worker
+        #    thread, so the server stays free for other requests meanwhile (the knowledge search, for
+        #    one, briefly uses the CPU). `asyncio.wait_for` gives up waiting after `timeout_s` — but the
+        #    thread itself keeps running in the background; Python has no way to kill it. We just stop
+        #    waiting for it and move on, which is safe here because tools don't touch shared state.
+        error: str | None = None
+        for attempt in (1, 2):
+            try:
+                value = await asyncio.wait_for(asyncio.to_thread(tool.fn, **args), timeout=tool.timeout_s)
+            except asyncio.TimeoutError:
+                error = f"timeout after {tool.timeout_s}s"
+                continue
+            except Exception as exc:  # any tool failure (a 500, bad data…) — never crashes the caller
+                message = str(exc)[:200]
+                error = f"{type(exc).__name__}: {message}"
+                continue
 
-        # 3 + 4. Render and wrap.
-        text = render_pieces(to_pieces(name, value), tool.untrusted_output)
-        return ToolResult(tool=name, ok=True, data=value, text=text, untrusted=tool.untrusted_output)
+            # 3. Render.
+            pieces = to_pieces(name, value)
+            # 4. Scan (T2): only untrusted output is checked — our own data doesn't need it.
+            flagged = tool.untrusted_output and scan_pieces(pieces)
+            # 5. Wrap.
+            text = render_pieces(pieces, tool.untrusted_output)
+            return ToolResult(
+                tool=name, ok=True, data=value, text=text, untrusted=tool.untrusted_output,
+                attempts=attempt, flagged=flagged,
+            )
+
+        # Both tries failed: a failed ToolResult instead of raising, so a worker can keep going.
+        # An exception message can carry outside text (an error page echoing the request, say), so for an
+        # untrusted tool the message itself is wrapped like any other result; only our own prefix stays outside.
+        text = f"[tool {name} failed]\n" + (wrap_untrusted(error, name) if tool.untrusted_output else escape_tags(error))
+        return ToolResult(
+            tool=name, ok=False, data=None, text=text, untrusted=tool.untrusted_output,
+            error=error, attempts=2,
+        )
