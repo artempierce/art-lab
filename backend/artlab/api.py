@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field
 from artlab.agents.common import text_of
 from artlab.config import DB_PATH, REPO_ROOT
 from artlab.graph import build_graph
+from artlab.guards.classifier import InjectionClassifier, load_classifier
 from artlab.model import cost_usd, make_model
 from artlab.rag.knowledge import KnowledgeBase
 from artlab.tools.catalog import build_tools
@@ -78,6 +79,7 @@ def create_app(
     model: BaseChatModel | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     knowledge: KnowledgeBase | None = None,
+    classifier: InjectionClassifier | None = None,
 ) -> FastAPI:
     """Build the FastAPI app.
 
@@ -85,9 +87,14 @@ def create_app(
         model:        chat model to use; None means "decide from .env" (see model.make_model)
         checkpointer: chat storage to use; None means "open data/artlab.db"
         knowledge:    knowledge base to search; None means "open data/chroma" (fill it with the ingest command)
+        classifier:   the guard's layer-2 injection classifier; None means "off" (docs/contracts.md § 8).
+                      Tests never pass one, so they stay fast and deterministic. The real server passes
+                      `load_classifier()` (see the last line of this file), which is None until it's
+                      been downloaded by hand.
 
-    The real server calls this with no arguments (see the last line of this file). Tests pass a fake
-    model, in-memory chat storage and a temporary knowledge base, so they run the whole API for free.
+    The real server calls this with no arguments except the classifier (see the last line of this
+    file). Tests pass a fake model, in-memory chat storage and a temporary knowledge base, so they
+    run the whole API for free.
     """
 
     @asynccontextmanager
@@ -105,7 +112,7 @@ def create_app(
                 saver = await stack.enter_async_context(AsyncSqliteSaver.from_conn_string(str(DB_PATH)))
             tools = build_tools(knowledge or KnowledgeBase())
             app.state.checkpointer = saver
-            app.state.graph = build_graph(model or make_model(), saver, tools)
+            app.state.graph = build_graph(model or make_model(), saver, tools, classifier=classifier)
             yield
 
     app = FastAPI(title="Art Lab", lifespan=lifespan)
@@ -226,5 +233,6 @@ def create_app(
     return app
 
 
-# The app object uvicorn serves (`uvicorn artlab.api:app`): real model, SQLite and Chroma, from .env.
-app = create_app()
+# The app object uvicorn serves (`uvicorn artlab.api:app`): real model, SQLite and Chroma, from .env,
+# plus the injection classifier if it's been downloaded (None, i.e. off, otherwise).
+app = create_app(classifier=load_classifier())
