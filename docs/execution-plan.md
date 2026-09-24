@@ -4,7 +4,7 @@
 model does each one — so development costs fewer tokens without lowering quality.
 **What to build and in what order** stays in the design book (`docs/design.html`); this plan follows it.
 
-Status: Waves 0–1, T3 and Phases 0–5 (Wave 2: F1, T7–T10) done; Phase 6 (approvals: T13a/T13b as P6a/P6b) done on 2026-09-24 · Phase 7 (memory + summarizing) done on 2026-09-24 · next: Phase 8 (skills).
+Status: Waves 0–1, T3 and Phases 0–5 (Wave 2: F1, T7–T10) done; Phase 6 (approvals: T13a/T13b as P6a/P6b) done on 2026-09-24 · Phase 7 (memory + summarizing) done on 2026-09-24 · Phase 8 (skills) done on 2026-09-24 · next: Phase 9 (handoffs, planned upfront).
 
 ---
 
@@ -100,7 +100,7 @@ change (plus its own tests), which is what makes parallel work safe.
 | T9 | `english_coach` (no tools) | 5 | Sonnet | `agents/english_coach.py` + tests | Grammar request routed and answered (S4) ✅ |
 | T10 | Register T7–T9 as routes; trace colours in the UI | 5 | Sonnet, after T7–T9 | worker registry line, `TracePanel.tsx` | Supervisor routes to all four workers ✅ |
 | T11 | **Long-term memory**: facts per user in a Chroma "memory" collection (reuses RAG code); extract after a run, recall before routing; summarise long chats; recalled facts are untrusted (they may come from tainted runs) and pass the same boundary | 7 | Sonnet (Opus review: user filtering) | `memory/*`, context node, tests | S8: niche recalled in a new chat ✅ |
-| T12 | **Skills**: skills index in worker prompts + `load_skill` tool (uses T5 files) | 8 | Sonnet | `skills` loader, catalog entry, tests | S9: skill loaded only when needed |
+| T12 | **Skills**: skills index in worker prompts + `load_skill` tool (uses T5 files) | 8 | Sonnet | `skills` loader, catalog entry, tests | S9: skill loaded only when needed ✅ |
 
 ### Wave 3 — cross-cutting control flow (Opus-led)
 
