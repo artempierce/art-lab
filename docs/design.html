@@ -150,7 +150,9 @@ html{scroll-behavior:smooth}
     <span class="pill done">Phase 0 ✓ (real-Claude check pending)</span>
     <span class="pill done">Phase 1 ✓</span>
     <span class="pill done">Phase 2 ✓ (real-Claude check pending)</span>
-    <span class="pill"><b>Next:</b> Phase 3 — supervisor v2</span>
+    <span class="pill done">Phase 3 ✓</span>
+    <span class="pill done">Phase 4 ✓</span>
+    <span class="pill"><b>Next:</b> Phase 5 — worker agents</span>
         <span class="pill done">all 18 decisions resolved</span>
   </div>
 </header>
@@ -823,8 +825,8 @@ flowchart LR
       <tr><td class="id">0</td><td>Web MVP: chat, streaming, trace panel, saved chats, LangSmith <span class="tag s-tool">done</span></td><td>Checklist above</td><td class="id">FR-1 FR-2 · S0</td></tr>
       <tr><td class="id">1</td><td>Input guard: size, 4 injection rules, $0.50 per-chat budget <span class="tag s-tool">done</span></td><td>Blocked inputs never reach the LLM</td><td class="id">W4 · S5</td></tr>
       <tr><td class="id">2</td><td><b>Knowledge base + main agent</b>: local knowledge base (Chroma), <code>search_knowledge</code> for rag_agent only, cited answers. Built together with the first supervisor (main agent routes to rag_agent), a minimal tool registry and web-page ingest with injection scanning. Tickets and findings in <code>docs/tickets/RAG.md</code>. <span class="tag s-tool">done</span></td><td>Retrieval hit@4 ≥ 90%; answers cite sources; out-of-corpus questions get "not found"</td><td class="id">FR-16 FR-17 · W11 W12 · S13–S16</td></tr>
-      <tr><td class="id">3</td><td>Supervisor v2: more routes as workers arrive, step limit (circuit breaker) once workers hand off</td><td>Routes to stub workers; breaker test passes</td><td class="id">W6 · S7 S11</td></tr>
-      <tr><td class="id">4</td><td>Tool gateway: extends Phase 2's registry with stubs, retries, failure handling</td><td>Wrapper can't be broken out of; failure retried</td><td class="id">W5 W9 · S6 S10</td></tr>
+      <tr><td class="id">3</td><td>Supervisor v2: more routes as workers arrive, step limit (circuit breaker) once workers hand off <span class="tag s-tool">done</span></td><td>Routes to stub workers; breaker test passes</td><td class="id">W6 · S7 S11</td></tr>
+      <tr><td class="id">4</td><td>Tool gateway: extends Phase 2's registry with stubs, retries, failure handling <span class="tag s-tool">done</span></td><td>Wrapper can't be broken out of; failure retried</td><td class="id">W5 W9 · S6 S10</td></tr>
       <tr><td class="id">5</td><td>Worker agents with bounded tool loops (same pattern as rag_agent)</td><td>Each worker answers using its tools</td><td class="id">W1 · S1 S4</td></tr>
       <tr><td class="id">6</td><td>Approve / Reject for mutating tools</td><td>save_ideas runs only after Approve</td><td class="id">W3 · S3</td></tr>
       <tr><td class="id">7</td><td>Long-term memory and summarizing (reuses Phase 2's embeddings and Chroma)</td><td>Facts recalled in a new chat</td><td class="id">W7 · S8</td></tr>
