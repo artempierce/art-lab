@@ -159,3 +159,46 @@ The re-search is decided by code (zero hits), so the model only writes the new w
 | docs sync | Haiku, after review | `README.md`, `docs/design.html` |
 
 No ticket edits README or the design book. One docs-sync pass at the end avoids merge conflicts there.
+
+## 8. Guard layer 2: the injection classifier (T3)
+
+Policy (design book Q16): **reduce privileges**. A flagged message is still answered, but the chat is
+tainted (§ 1), so data-changing tools are refused in it. The regex rules (layer 1) keep blocking outright.
+
+**`guards/classifier.py`** (new):
+
+```python
+MODEL_REPO = "protectai/deberta-v3-base-prompt-injection-v2"   # Apache-2.0, ONNX export in its onnx/ folder
+MODEL_DIR  = MODELS_DIR / "prompt-injection"                   # data/models/prompt-injection (gitignored)
+THRESHOLD  = 0.9                                                # P(injection) at or above this → flagged
+
+class InjectionClassifier(Protocol):
+    def score(self, text: str) -> float: ...                    # 0–1, probability the text is an injection
+
+class OnnxInjectionClassifier:                                  # the real one: onnxruntime + tokenizers, no PyTorch
+    def __init__(self, model_dir: Path = MODEL_DIR): ...
+
+def load_classifier() -> InjectionClassifier | None: ...        # None if the model files aren't downloaded
+```
+
+- Runs on CPU with `onnxruntime` + `tokenizers` + `huggingface_hub`. They're already installed through fastembed;
+  declare them as direct dependencies. No PyTorch, no `transformers`.
+- Texts longer than the model's 512-token window are scored in windows, and the **highest** window score wins.
+- **Never downloads on its own** (~740 MB). `uv run python -m artlab.guards.classifier` downloads only the ONNX
+  model and tokenizer files, then prints the scores for a few sample phrases.
+
+**Guard node:** `guard.make_node(classifier: InjectionClassifier | None = None)`. After the regex check passes:
+
+| Situation | Trace line (stage `guard`) | State update |
+|---|---|---|
+| no classifier (not downloaded, CI, tests) | status `ok`, detail ends `· classifier off` | as today |
+| score < THRESHOLD | status `ok`, detail ends `· classifier 0.03` | as today |
+| score ≥ THRESHOLD | status **`flagged`**, detail `… · classifier 0.97 ≥ 0.90 → chat tainted, data-changing tools locked` | `tainted: True`, run continues |
+| `score()` raises | status **`flagged`**, detail says the classifier failed | `tainted: True`, fail-safe: an error must never mean "trusted" |
+
+`score()` is CPU work, so it runs in `asyncio.to_thread`. The blocked path (layer 1) doesn't run the classifier at all.
+
+**Wiring:** `build_graph(..., classifier=None)` passes it to the guard. `create_app(..., classifier=None)`: tests get
+no classifier by default (fast, deterministic). The module-level `app = create_app(classifier=load_classifier())`
+gives the real server the model when it's on disk. Add `flagged` to § 5's status values: the UI already shows any
+non-`ok` status in the warning colour.
