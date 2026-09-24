@@ -1,0 +1,45 @@
+# Golden evals for the youtube_researcher agent.
+#
+# This agent analyzes YouTube trends, viewer comments, and retention patterns to help creators
+# make data-driven content decisions. Each entry captures a research request and the quality bar
+# for the response.
+#
+# Shape: [{input, checks}]. Input is the creator's research question.
+# Checks are plain-language assertions about what a good response must include.
+#
+# Used by Phase 11 paid evals to grade researcher output.
+
+- input: What's trending in desk-setup videos right now?
+  checks:
+    - Identifies at least 3 recent trends (within last 30 days) with specific examples
+    - Cites view counts, growth rates, or comment themes as evidence
+    - Suggests which trends fit the creator's niche and audience
+    - Mentions at least 2 creators or channels leading each trend
+
+- input: Why are viewers leaving my desk-setup tutorial at the 2-minute mark?
+  checks:
+    - Provides minute-by-minute retention data or estimates for the video
+    - Identifies the likely cause (e.g., pacing, broken promise, sponsor read, boring segment)
+    - Cites at least 3 viewer comments that reveal frustration or confusion at that point
+    - Suggests one specific fix to test (e.g., move main idea earlier, cut sponsor read)
+
+- input: Which desk ergonomics topics are underserved in the art-tools niche?
+  checks:
+    - Compares search volume or view counts for related topics (e.g., monitor height, chair posture)
+    - Identifies 2–3 gaps where few creators produce content
+    - Shows competitor analysis (what top 3 creators cover vs. what's missing)
+    - Estimates audience size or engagement for each gap
+
+- input: How do top creators structure desk-setup reviews to keep engagement high?
+  checks:
+    - Analyzes at least 3 top-performing desk-setup videos with 100K+ views
+    - Notes common structure patterns (hook timing, segment lengths, call-to-action placement)
+    - Cites average retention curves or watch-time percentages
+    - Highlights one structural choice that most high-performing videos share
+
+- input: What do viewers complain about most in budget desk-setup content?
+  checks:
+    - Summarizes at least 10 comments from recent budget desk-setup videos
+    - Groups complaints into themes (e.g., "cheap materials don't last," "poor ergonomics," "looks cluttered")
+    - Ranks themes by frequency or engagement (likes/replies)
+    - Suggests one content angle to address the top complaint
