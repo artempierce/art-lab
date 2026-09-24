@@ -44,13 +44,17 @@ KNOWLEDGE_HINTS = re.compile(
 )
 
 # T10 (Phase 5): the same crude trick, one hint per new worker. Checked in this order, before
-# KNOWLEDGE_HINTS, in `_pick_route` below.
+# KNOWLEDGE_HINTS, in `_pick_routes` below.
+# H1 (Phase 9, docs/contracts.md § 13): `polish\w*` (not just the bare word "polish") so "3 polished
+# ideas" also matches — S2's plan needs english_coach even when the word is inflected.
 ENGLISH_COACH_HINTS = re.compile(
-    r"\b(grammar|polish|proofread|rephrase|spelling)\b|\bfix (?:the|this) (?:text|sentence|wording)\b",
+    r"\b(grammar|polish\w*|proofread|rephrase|spelling)\b|\bfix (?:the|this) (?:text|sentence|wording)\b",
     re.IGNORECASE,
 )
+# H1: "niche" added so "find a niche" also plans a research step (S2), alongside the existing
+# trend/comment/viewer/competitor words.
 YOUTUBE_RESEARCHER_HINTS = re.compile(
-    r"\b(trend|trending|comments?|viewers?|competitors?)\b|what'?s popular",
+    r"\b(trend|trending|comments?|viewers?|competitors?|niche)\b|what'?s popular",
     re.IGNORECASE,
 )
 CONTENT_IDEATOR_HINTS = re.compile(r"\b(ideas?|hooks?|outline|brainstorm)\b", re.IGNORECASE)
@@ -67,7 +71,13 @@ FACTS_PATTERN = re.compile(r"\bmy (\w+(?: \w+)?) is ([^.,!?]+)", re.IGNORECASE)
 # me 3 ideas", which never asks to save anything. Phase 8 (§ 12) made `_reply_with_tools` walk every
 # bound tool in order instead of only ever looking at the first one, so a worker whose first tool's
 # hint doesn't match (save_ideas) can still fall through to a later one that does (load_skill, below).
-FAKE_TOOL_HINTS: dict[str, re.Pattern] = {"save_ideas": re.compile(r"\bsave\b", re.IGNORECASE)}
+FAKE_TOOL_HINTS: dict[str, re.Pattern] = {
+    "save_ideas": re.compile(r"\bsave\b", re.IGNORECASE),
+    # Phase 9b (docs/contracts.md § 13): content_ideator's ask_youtube_researcher (tools/agents.py) —
+    # a task that mentions trends or asks for research gets sent to youtube_researcher first, the same
+    # crude stand-in for "the model decided this needs another agent's answer".
+    "ask_youtube_researcher": re.compile(r"\b(trend\w*|research)\b", re.IGNORECASE),
+}
 
 # Phase 8 (docs/contracts.md § 12): a crude stand-in for the model recognising which skill a task
 # needs, since the fake can't read a loaded skill's own description the way a real model would. The
@@ -78,14 +88,15 @@ FAKE_SKILL_HINTS: tuple[tuple[str, re.Pattern], ...] = (
     ("hook-formulas", re.compile(r"\bhooks?\b", re.IGNORECASE)),
 )
 
-# The fake router's whole decision table, checked top to bottom (docs/contracts.md § 9, T10): the
-# first pattern that matches the question *and* whose route is actually allowed by the schema wins.
-# `_pick_route` falls through to "respond" if nothing matches (or nothing matching is allowed).
+# H1 (Phase 9, docs/contracts.md § 13): the fake router's canonical plan order — every hint that
+# matches the question fires, in THIS order, so a multi-step question ("find a niche... and give me
+# 3 polished ideas") plans research -> ideas -> polish, not whatever order the words happened to
+# appear in. `rag_agent` (the studio's-docs hint) is deliberately not in this table: it's a separate,
+# single-purpose route, only ever picked on its own (see `_pick_routes`), never combined into a plan.
 ROUTE_HINTS: tuple[tuple[str, re.Pattern, str], ...] = (
-    ("english_coach", ENGLISH_COACH_HINTS, "fake router: mentions grammar, polish or rephrasing"),
     ("youtube_researcher", YOUTUBE_RESEARCHER_HINTS, "fake router: mentions trends, comments or viewers"),
     ("content_ideator", CONTENT_IDEATOR_HINTS, "fake router: mentions ideas, hooks or an outline"),
-    ("rag_agent", KNOWLEDGE_HINTS, "fake router: mentions the studio's docs"),
+    ("english_coach", ENGLISH_COACH_HINTS, "fake router: mentions grammar, polish or rephrasing"),
 )
 
 
@@ -110,19 +121,30 @@ def _allowed_routes(schema: Any) -> set[str] | None:
     return None
 
 
-def _pick_route(question: str, allowed: set[str] | None) -> tuple[str, str]:
-    """Choose a route and its reason for the fake supervisor (see `ROUTE_HINTS`).
+def _pick_routes(question: str, allowed: set[str] | None) -> list[tuple[str, str]]:
+    """Choose the fake supervisor's whole plan for `question`: every `ROUTE_HINTS` entry whose pattern
+    matches, in that (canonical) order, each paired with its reason (docs/contracts.md § 13). The
+    caller turns the first pair into `next` and the rest into `then`.
 
-    The first hint whose pattern matches `question` AND whose route is in `allowed` wins; a matching
-    hint whose route isn't allowed is skipped, not taken (so it can fall through to the next hint, and
-    ultimately to "respond") — that's what test_phase5_routes.py's schema test checks: a graph built
-    with only `respond` registered must still land on "respond" for a grammar request, never on a
-    route "RouteDecision" would refuse. `allowed=None` (an unrecognised schema) allows every hint.
+    A matching hint whose route isn't in `allowed` is skipped, not taken — same rule as before H1: a
+    graph built with only `respond` registered must still land on "respond" for a grammar request,
+    never on a route the bound `RouteDecision` schema would refuse. `allowed=None` (an unrecognised
+    schema) allows every hint.
+
+    `rag_agent` is not in `ROUTE_HINTS` (see its comment) and is only ever picked alone: it's added
+    here, and only here, when nothing else matched at all — so a studio-docs question still reaches it
+    exactly as before H1, but it never joins a multi-step plan. Nothing at all matching falls through
+    to "respond", same as always.
     """
-    for route, pattern, reason in ROUTE_HINTS:
-        if pattern.search(question) and (allowed is None or route in allowed):
-            return route, reason
-    return "respond", "fake router: general question"
+    matches = [
+        (route, reason) for route, pattern, reason in ROUTE_HINTS
+        if pattern.search(question) and (allowed is None or route in allowed)
+    ]
+    if matches:
+        return matches
+    if KNOWLEDGE_HINTS.search(question) and (allowed is None or "rag_agent" in allowed):
+        return [("rag_agent", "fake router: mentions the studio's docs")]
+    return [("respond", "fake router: general question")]
 
 
 def make_model() -> BaseChatModel:
@@ -149,10 +171,12 @@ def make_model() -> BaseChatModel:
 class FakeChatModel(BaseChatModel):
     """A free, predictable stand-in for Claude. It plays five roles:
 
-      supervisor       when asked for a RouteDecision (structured output), it picks a route from
-                       `ROUTE_HINTS` — a crude keyword check, in order: english_coach, youtube_researcher,
-                       content_ideator, then the original KNOWLEDGE_HINTS → rag_agent, else "respond"
-                       (`_pick_route`). It never picks a route the bound schema doesn't actually allow
+      supervisor       when asked for a RouteDecision (structured output), it picks every matching
+                       route from `ROUTE_HINTS` — a crude keyword check, in canonical order:
+                       youtube_researcher, content_ideator, english_coach; else KNOWLEDGE_HINTS →
+                       rag_agent alone, else "respond" (`_pick_routes`). The first match is `next`,
+                       any rest become `then` — a multi-step plan (H1, Phase 9, docs/contracts.md
+                       § 13). It never picks a route the bound schema doesn't actually allow
                        (`_allowed_routes`), so tests that register only some workers still get a real one.
       rag_agent        when its prompt contains <untrusted_retrieval> sources, it quotes the start of
                        source [1] and cites it — so you can see real retrieval results in the UI
@@ -181,7 +205,7 @@ class FakeChatModel(BaseChatModel):
 
     replies: list[str] = Field(default_factory=lambda: [FAKE_REPLY])
     tool_name: str | None = None  # set by bind_tools: the structured-output schema we must "fill in"
-    tool_schema: Any = None  # set by bind_tools: the schema itself, so _pick_route can read its `next`
+    tool_schema: Any = None  # set by bind_tools: the schema itself, so _pick_routes can read its `next`
     tool_specs: list | None = None  # set by bind_tools: a real tool list, from run_tool_loop (§ 9)
     _turn: Any = PrivateAttr(default_factory=itertools.count)  # which reply comes next
 
@@ -228,6 +252,10 @@ class FakeChatModel(BaseChatModel):
             return AIMessage(f"(Fake model, no API call.) The tool said: {start}")
 
         task = next(m.content for m in reversed(messages) if isinstance(m, HumanMessage))
+        # In a plan (Phase 9), a step's task is "<question>\n\nInput from <agent> (…):\n<artifact>". Match the
+        # hints against the question only: words inside the previous step's output (say, "trending" in the
+        # research) mustn't make the fake call a tool the question never asked for.
+        task = str(task).split("\n\nInput from ", 1)[0]
         for spec in self.tool_specs:
             function = spec["function"]
             name = function["name"]
@@ -249,8 +277,9 @@ class FakeChatModel(BaseChatModel):
         """Decide what to say, based on which role we're playing (see the class docstring)."""
         if self.tool_name == "RouteDecision":
             question = next(m.content for m in reversed(messages) if isinstance(m, HumanMessage))
-            route, reason = _pick_route(question, _allowed_routes(self.tool_schema))
-            args = {"next": route, "reason": reason, "question": question}
+            routes = _pick_routes(question, _allowed_routes(self.tool_schema))
+            (route, reason), then = routes[0], [r for r, _ in routes[1:]]
+            args = {"next": route, "then": then, "reason": reason, "question": question}
             return AIMessage("", tool_calls=[{"name": self.tool_name, "args": args, "id": "fake-call", "type": "tool_call"}])
         if self.tool_name == "Rephrase":
             question = next(m.content for m in reversed(messages) if isinstance(m, HumanMessage))

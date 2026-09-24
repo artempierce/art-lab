@@ -171,12 +171,16 @@ def test_sponsorship_policy_question_still_routes_to_rag_agent(tmp_path):
 def test_get_agents_lists_every_phase5_worker_with_its_real_tools(tmp_path):
     """GET /api/agents (the sidebar's Team panel, X3) must list Arty, rag_agent and the three Phase 5
     workers, each with its real tools: youtube_researcher gets both YouTube stubs plus load_skill, all
-    read-only; content_ideator gets its Phase 6 save_ideas (mutating) plus load_skill (read-only);
-    english_coach gets only load_skill.
+    read-only; content_ideator gets its Phase 6 save_ideas (mutating), load_skill (read-only) and its
+    Phase 9b ask_youtube_researcher (read-only); english_coach gets only load_skill.
 
     Updated for Phase 8 (docs/contracts.md § 12): all three workers are now on load_skill's allow-list,
     so english_coach's tools list is no longer empty, and the other two gain one read-only entry each —
-    on top of Phase 6's update, which gave content_ideator save_ideas in the first place."""
+    on top of Phase 6's update, which gave content_ideator save_ideas in the first place.
+
+    Updated again for Phase 9b (docs/contracts.md § 13, H2): content_ideator can now also ask
+    youtube_researcher a question mid-turn, so its tools list gains one more read-only entry,
+    ask_youtube_researcher — nobody else's list changes, since it's content_ideator-only."""
     app = create_app(
         model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path),
         ideas_dir=tmp_path / "ideas", memory=empty_memory(tmp_path),
@@ -194,9 +198,10 @@ def test_get_agents_lists_every_phase5_worker_with_its_real_tools(tmp_path):
 
     ideator = next(e for e in body if e["name"] == "content_ideator")
     coach = next(e for e in body if e["name"] == "english_coach")
-    assert {t["name"] for t in ideator["tools"]} == {"save_ideas", "load_skill"}
+    assert {t["name"] for t in ideator["tools"]} == {"save_ideas", "load_skill", "ask_youtube_researcher"}
     assert {t["tier"] for t in ideator["tools"] if t["name"] == "save_ideas"} == {"changes data"}
     assert {t["tier"] for t in ideator["tools"] if t["name"] == "load_skill"} == {"read-only"}
+    assert {t["tier"] for t in ideator["tools"] if t["name"] == "ask_youtube_researcher"} == {"read-only"}
     assert coach["tools"] == [{
         "name": "load_skill", "tier": "read-only",
         "description": "Load a skill's full instructions by name, when the task needs know-how beyond what's already in your prompt.",

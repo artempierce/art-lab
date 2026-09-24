@@ -4,7 +4,7 @@
 model does each one — so development costs fewer tokens without lowering quality.
 **What to build and in what order** stays in the design book (`docs/design.html`); this plan follows it.
 
-Status: Waves 0–1, T3 and Phases 0–5 (Wave 2: F1, T7–T10) done; Phase 6 (approvals: T13a/T13b as P6a/P6b) done on 2026-09-24 · Phase 7 (memory + summarizing) done on 2026-09-24 · Phase 8 (skills) done on 2026-09-24 · next: Phase 9 (handoffs, planned upfront).
+Status: Waves 0–1, T3 and Phases 0–5 (Wave 2: F1, T7–T10) done; Phase 6 (approvals: T13a/T13b as P6a/P6b) done on 2026-09-24 · Phase 7 (memory + summarizing) done on 2026-09-24 · Phase 8 (skills) done on 2026-09-24 · Phase 9 + 9b (handoffs planned upfront, agent calls agent) done on 2026-09-24 · next: Phase 10 (output guard + caps).
 
 ---
 
@@ -108,7 +108,7 @@ change (plus its own tests), which is what makes parallel work safe.
 |---|---|---|---|---|---|
 | T13a | **Approvals protocol**: LangGraph interrupt on mutating tools, resume endpoint, `approval` SSE event, `save_ideas` tool | 6 | Opus | graph wiring, `api.py`, `tools/` | S3 passes: nothing written until Approve ✅ |
 | T13b | Approve / Reject card in the UI (from T13a's event spec) | 6 | Sonnet, in parallel with T13a once the spec is written | `ChatView.tsx`, `api.ts` | Card appears, click resumes the run ✅ |
-| T14 | **Handoffs + agent-calls-agent**: typed artifacts between workers; ideator calls researcher at depth 1 | 9, 9b | Opus design, Sonnet implementation | graph wiring, agents | S2: research → ideas → polish end to end |
+| T14 | **Handoffs + agent-calls-agent**: typed artifacts between workers; ideator calls researcher at depth 1 | 9, 9b | Opus design, Sonnet implementation | graph wiring, agents | S2: research → ideas → polish end to end ✅ |
 | T15 | **Output guard + token/time caps** | 10 | Sonnet (Opus review) | `guards/output.py`, caps | Cap tests pass |
 
 ### Wave 4 — evals and dashboards (3 in parallel)
