@@ -17,12 +17,18 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Run } from '../App'
 
-// Stage name → text colour: guard amber, Arty navy, rag_agent red, tools green (dark enough for white cards).
+// Stage name → text colour: guard amber, Arty navy, rag_agent red, tools green (dark enough for white
+// cards). The Phase 5 (T10) workers reuse the app's other gadget colours (Arty.tsx), each one distinct
+// from every stage above and still dark enough to read on white: youtube_researcher sky-blue,
+// content_ideator orange, english_coach red-orange.
 const STAGE_COLOR: Record<string, string> = {
   guard: 'text-t-guard',
   arty: 'text-t-agent',
   rag_agent: 'text-t-rag',
   tool: 'text-t-tool',
+  youtube_researcher: 'text-sky',
+  content_ideator: 'text-orange',
+  english_coach: 'text-red',
 }
 
 // Status → icon at the start of the line. Unknown statuses get a plain dot.

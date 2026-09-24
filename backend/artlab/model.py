@@ -19,8 +19,9 @@ import itertools
 import json
 import os
 import re
-from typing import Any
+from typing import Any, get_args
 
+import pydantic
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
@@ -41,6 +42,64 @@ KNOWLEDGE_HINTS = re.compile(
     r"moderation|upload\w*|calendar|approv\w*|brand|studio|architecture|personas?)\b",
     re.IGNORECASE,
 )
+
+# T10 (Phase 5): the same crude trick, one hint per new worker. Checked in this order, before
+# KNOWLEDGE_HINTS, in `_pick_route` below.
+ENGLISH_COACH_HINTS = re.compile(
+    r"\b(grammar|polish|proofread|rephrase|spelling)\b|\bfix (?:the|this) (?:text|sentence|wording)\b",
+    re.IGNORECASE,
+)
+YOUTUBE_RESEARCHER_HINTS = re.compile(
+    r"\b(trend|trending|comments?|viewers?|competitors?)\b|what'?s popular",
+    re.IGNORECASE,
+)
+CONTENT_IDEATOR_HINTS = re.compile(r"\b(ideas?|hooks?|outline|brainstorm)\b", re.IGNORECASE)
+
+# The fake router's whole decision table, checked top to bottom (docs/contracts.md § 9, T10): the
+# first pattern that matches the question *and* whose route is actually allowed by the schema wins.
+# `_pick_route` falls through to "respond" if nothing matches (or nothing matching is allowed).
+ROUTE_HINTS: tuple[tuple[str, re.Pattern, str], ...] = (
+    ("english_coach", ENGLISH_COACH_HINTS, "fake router: mentions grammar, polish or rephrasing"),
+    ("youtube_researcher", YOUTUBE_RESEARCHER_HINTS, "fake router: mentions trends, comments or viewers"),
+    ("content_ideator", CONTENT_IDEATOR_HINTS, "fake router: mentions ideas, hooks or an outline"),
+    ("rag_agent", KNOWLEDGE_HINTS, "fake router: mentions the studio's docs"),
+)
+
+
+def _allowed_routes(schema: Any) -> set[str] | None:
+    """The RouteDecision schema's allowed `next` values, read from whatever shape
+    `with_structured_output` handed to `bind_tools` (model.py's own docstring explains why there are
+    two): a pydantic class (what `agents/supervisor.py` passes today) or a plain JSON-schema dict (what
+    some providers convert it to first). Returns None if the shape isn't recognised, so an unfamiliar
+    schema doesn't silently block every route.
+
+    This is what keeps the fake honest: it must never pick a route the schema itself would reject, even
+    when a test builds a graph with only some of the real workers (docs/contracts.md § 3's `workers=`).
+    """
+    if isinstance(schema, type) and issubclass(schema, pydantic.BaseModel):
+        field = schema.model_fields.get("next")
+        return set(get_args(field.annotation)) if field is not None else None
+    if isinstance(schema, dict):
+        function = schema.get("function", schema)
+        properties = function.get("parameters", function).get("properties", {})
+        enum = properties.get("next", {}).get("enum")
+        return set(enum) if enum else None
+    return None
+
+
+def _pick_route(question: str, allowed: set[str] | None) -> tuple[str, str]:
+    """Choose a route and its reason for the fake supervisor (see `ROUTE_HINTS`).
+
+    The first hint whose pattern matches `question` AND whose route is in `allowed` wins; a matching
+    hint whose route isn't allowed is skipped, not taken (so it can fall through to the next hint, and
+    ultimately to "respond") — that's what test_phase5_routes.py's schema test checks: a graph built
+    with only `respond` registered must still land on "respond" for a grammar request, never on a
+    route "RouteDecision" would refuse. `allowed=None` (an unrecognised schema) allows every hint.
+    """
+    for route, pattern, reason in ROUTE_HINTS:
+        if pattern.search(question) and (allowed is None or route in allowed):
+            return route, reason
+    return "respond", "fake router: general question"
 
 
 def make_model() -> BaseChatModel:
@@ -67,8 +126,11 @@ def make_model() -> BaseChatModel:
 class FakeChatModel(BaseChatModel):
     """A free, predictable stand-in for Claude. It plays five roles:
 
-      supervisor       when asked for a RouteDecision (structured output), it routes to rag_agent if
-                       the question contains a KNOWLEDGE_HINTS word, otherwise to "respond"
+      supervisor       when asked for a RouteDecision (structured output), it picks a route from
+                       `ROUTE_HINTS` — a crude keyword check, in order: english_coach, youtube_researcher,
+                       content_ideator, then the original KNOWLEDGE_HINTS → rag_agent, else "respond"
+                       (`_pick_route`). It never picks a route the bound schema doesn't actually allow
+                       (`_allowed_routes`), so tests that register only some workers still get a real one.
       rag_agent        when its prompt contains <untrusted_retrieval> sources, it quotes the start of
                        source [1] and cites it — so you can see real retrieval results in the UI
       rag_agent retry  when asked for a Rephrase (structured output, after a first search found
@@ -89,6 +151,7 @@ class FakeChatModel(BaseChatModel):
 
     replies: list[str] = Field(default_factory=lambda: [FAKE_REPLY])
     tool_name: str | None = None  # set by bind_tools: the structured-output schema we must "fill in"
+    tool_schema: Any = None  # set by bind_tools: the schema itself, so _pick_route can read its `next`
     tool_specs: list | None = None  # set by bind_tools: a real tool list, from run_tool_loop (§ 9)
     _turn: Any = PrivateAttr(default_factory=itertools.count)  # which reply comes next
 
@@ -98,12 +161,13 @@ class FakeChatModel(BaseChatModel):
 
     def bind_tools(self, tools: list, **kwargs: Any) -> "FakeChatModel":
         """Return a copy bound to `tools`, playing whichever tool-calling role fits how it was called
-        (see the class docstring): structured output forces one schema (`tool_name`); a plain tool list
-        from `run_tool_loop` is remembered whole (`tool_specs`), so `_reply_with_tools` can call one."""
+        (see the class docstring): structured output forces one schema (`tool_name`, `tool_schema`); a
+        plain tool list from `run_tool_loop` is remembered whole (`tool_specs`), so `_reply_with_tools`
+        can call one."""
         if "ls_structured_output_format" in kwargs:
             tool = tools[0]
             name = tool.__name__ if isinstance(tool, type) else tool["name"]
-            return self.model_copy(update={"tool_name": name})
+            return self.model_copy(update={"tool_name": name, "tool_schema": tool})
         return self.model_copy(update={"tool_specs": tools})
 
     def _reply_with_tools(self, messages: list[BaseMessage]) -> AIMessage:
@@ -129,12 +193,8 @@ class FakeChatModel(BaseChatModel):
         """Decide what to say, based on which role we're playing (see the class docstring)."""
         if self.tool_name == "RouteDecision":
             question = next(m.content for m in reversed(messages) if isinstance(m, HumanMessage))
-            to_rag = bool(KNOWLEDGE_HINTS.search(question))
-            args = {
-                "next": "rag_agent" if to_rag else "respond",
-                "reason": "fake router: mentions the studio's docs" if to_rag else "fake router: general question",
-                "question": question,
-            }
+            route, reason = _pick_route(question, _allowed_routes(self.tool_schema))
+            args = {"next": route, "reason": reason, "question": question}
             return AIMessage("", tool_calls=[{"name": self.tool_name, "args": args, "id": "fake-call", "type": "tool_call"}])
         if self.tool_name == "Rephrase":
             question = next(m.content for m in reversed(messages) if isinstance(m, HumanMessage))
