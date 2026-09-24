@@ -8,6 +8,9 @@ Endpoints:
     GET  /api/threads              list all chats, newest first (the left sidebar)
     GET  /api/threads/{thread_id}  one chat's full history, with each answer's sources
     GET  /api/agents               the team and their tools, for the sidebar's Team panel (X3)
+    GET  /api/memory                list every saved fact, newest first (Phase 12 Memory page)
+    PUT  /api/memory/{key}           edit a fact's value; 404 if the key doesn't exist
+    DELETE /api/memory/{key}         remove a fact; 204, or 404 if the key doesn't exist
 
 How POST /api/chat (and /api/chat/resume) stream. The response is *server-sent events* (SSE): a
 long-lived HTTP response made of small text blocks, each one looking like
@@ -47,7 +50,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
@@ -62,7 +65,7 @@ from artlab.agents.workers import WORKERS
 from artlab.config import DB_PATH, IDEAS_DIR, REPO_ROOT
 from artlab.graph import build_graph
 from artlab.guards.classifier import InjectionClassifier, load_classifier
-from artlab.memory.store import MemoryStore
+from artlab.memory.store import MemoryStore, normalise_key
 from artlab.model import cost_usd, make_model
 from artlab.rag.knowledge import KnowledgeBase
 from artlab.tools.catalog import build_tools
@@ -100,6 +103,15 @@ class ResumeRequest(BaseModel):
     thread_id: str
     id: str
     approve: bool
+
+
+class MemoryUpdate(BaseModel):
+    """The JSON body of PUT /api/memory/{key} (Phase 12, docs/contracts.md § 15): the fact's new
+    value. Edits come from the owner's own browser on localhost, so — like the owner's own chat
+    messages (§ 11) — they're trusted directly, with no extraction step in between.
+    """
+
+    value: str = Field(min_length=1)
 
 
 def sse(event: str, data: dict) -> str:
@@ -240,9 +252,13 @@ def create_app(
             # `ask_youtube_researcher` runs (Phase 9b, docs/contracts.md § 13) share this one model.
             chat_model = model or make_model()
             tools = build_tools(knowledge or KnowledgeBase(), ideas_dir or IDEAS_DIR, model=chat_model)
+            mem_store = memory or MemoryStore()
             app.state.checkpointer = saver
             app.state.tools = tools
-            app.state.graph = build_graph(chat_model, saver, tools, memory or MemoryStore(), classifier=classifier)
+            # Kept on app.state too (not just closed over by the graph) so the memory endpoints
+            # below can read and write it directly, with no graph run involved (Phase 12).
+            app.state.memory = mem_store
+            app.state.graph = build_graph(chat_model, saver, tools, mem_store, classifier=classifier)
             yield
 
     app = FastAPI(title="Art Lab", lifespan=lifespan)
@@ -356,6 +372,37 @@ def create_app(
         built from the same `WORKERS` registry and tool registry the graph itself runs on, so this can
         never show a worker or a tool the app doesn't really have. See docs/contracts.md § 9."""
         return team(WORKERS, app.state.tools)
+
+    @app.get("/api/memory")
+    async def list_memory():
+        """Every fact the owner has ever taught Arty, newest first (Phase 12 Memory page,
+        docs/contracts.md § 15): [{key, value, created_at, thread_id}]. Backed by the same
+        `MemoryStore` the graph's `recall`/`remember` nodes use (§ 11), so what you see here is
+        exactly what future chats are shown."""
+        return [
+            {"key": f["key"], "value": f["value"], "created_at": f["created_at"], "thread_id": f["thread_id"]}
+            for f in app.state.memory.all()
+        ]
+
+    @app.put("/api/memory/{key}")
+    async def update_memory(key: str, req: MemoryUpdate):
+        """Edit one fact's value (Phase 12, docs/contracts.md § 15): the store's own normalisation
+        and length cap apply (memory/store.py's `update`). 404 if no fact has this key."""
+        try:
+            app.state.memory.update(key, req.value)
+        except KeyError:
+            raise HTTPException(404, "No fact with that key")
+        updated = next(f for f in app.state.memory.all() if f["key"] == normalise_key(key))
+        return {"key": updated["key"], "value": updated["value"], "created_at": updated["created_at"], "thread_id": updated["thread_id"]}
+
+    @app.delete("/api/memory/{key}", status_code=204)
+    async def delete_memory(key: str):
+        """Forget one fact (Phase 12, docs/contracts.md § 15). 404 if no fact has this key, so a
+        double-click (or a stale page) can't look like a successful delete of nothing."""
+        if not any(f["key"] == normalise_key(key) for f in app.state.memory.all()):
+            raise HTTPException(404, "No fact with that key")
+        app.state.memory.delete(key)
+        return Response(status_code=204)
 
     @app.get("/api/threads/{thread_id}")
     async def get_thread(thread_id: str):

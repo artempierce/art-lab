@@ -30,8 +30,14 @@ import {
 } from './api'
 import type { ArtyMood } from './components/Arty'
 import { ChatView } from './components/ChatView'
+import { MemoryPage } from './components/MemoryPage'
+import { RunsPage } from './components/RunsPage'
 import { Sidebar } from './components/Sidebar'
 import { TracePanel } from './components/TracePanel'
+
+/** Which page is showing (Phase 12, P12): the chat (with its trace panel), the Memory page, or the
+ * Runs placeholder. Sidebar's nav buttons switch this; only "chat" also shows the trace panel. */
+export type View = 'chat' | 'memory' | 'runs'
 
 /**
  * One message you sent, and everything the backend reported while answering it: the trace ID
@@ -71,6 +77,7 @@ export default function App() {
   const [threadsError, setThreadsError] = useState<string | null>(null) // shown in the sidebar if the list failed to load
   const [threadId, setThreadId] = useState<string | null>(null) // the open chat; null = a new, unsaved chat
   const [messages, setMessages] = useState<Message[]>([]) // bubbles in the open chat
+  const [view, setView] = useState<View>('chat') // which page is showing (Phase 12); Sidebar's nav sets this
 
   // Trace panel blocks, kept per chat (keyed by thread ID, or NEW_CHAT_KEY for an unsaved new
   // chat) for as long as this tab stays open. This is memory only: it's never sent to the server
@@ -232,7 +239,9 @@ export default function App() {
    * stream), so a reloaded chat never shows a stale ApprovalCard.
    */
   function openThread(id: string) {
-    if (busy || id === threadId) return
+    if (busy) return
+    setView('chat') // a chat click always returns to the chat pane, even from Memory/Runs
+    if (id === threadId) return // already loaded; just switching back from Memory/Runs
     setThreadId(id)
     getThread(id)
       .then((t) => setMessages(t.messages))
@@ -248,25 +257,43 @@ export default function App() {
     if (busy) return
     setThreadId(null)
     setMessages([])
+    setView('chat') // "New chat" always returns to the chat pane, even from Memory/Runs
     setRunsByThread((rs) => ({ ...rs, [NEW_CHAT_KEY]: [] }))
   }
 
   const title = threads.find((t) => t.thread_id === threadId)?.title ?? 'New chat'
   const mood = artyMood(runs, busy)
 
-  // Three columns on wide screens (lg = 1024px and up). Narrower, only the chat shows.
+  // Three columns on wide screens (lg = 1024px and up) for the chat view; Memory and Runs (Phase
+  // 12/13) have no trace panel, so they get the middle+right space as one pane.
   return (
-    <div className="grid h-full grid-cols-1 lg:grid-cols-[270px_minmax(0,1fr)_380px]">
-      <Sidebar threads={threads} error={threadsError} activeId={threadId} onOpen={openThread} onNew={newChat} />
-      <ChatView
-        title={title}
-        messages={messages}
-        busy={busy}
-        mood={mood}
-        onSend={send}
-        onRespondApproval={respondToApproval}
+    <div
+      className={`grid h-full grid-cols-1 ${view === 'chat' ? 'lg:grid-cols-[270px_minmax(0,1fr)_380px]' : 'lg:grid-cols-[270px_minmax(0,1fr)]'}`}
+    >
+      <Sidebar
+        threads={threads}
+        error={threadsError}
+        activeId={threadId}
+        view={view}
+        onOpen={openThread}
+        onNew={newChat}
+        onNavigate={setView}
       />
-      <TracePanel runs={runs} busy={busy} />
+      {view === 'memory' && <MemoryPage />}
+      {view === 'runs' && <RunsPage />}
+      {view === 'chat' && (
+        <>
+          <ChatView
+            title={title}
+            messages={messages}
+            busy={busy}
+            mood={mood}
+            onSend={send}
+            onRespondApproval={respondToApproval}
+          />
+          <TracePanel runs={runs} busy={busy} />
+        </>
+      )}
     </div>
   )
 }

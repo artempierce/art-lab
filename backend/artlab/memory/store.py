@@ -95,6 +95,25 @@ class MemoryStore:
             ids=[f"{OWNER_ID}:{key}"],
         )
 
+    def update(self, key: str, value: str) -> None:
+        """Edit an existing fact's value (the Phase 12 Memory page, docs/contracts.md § 15):
+        normalises and caps `value` the same way `save` does, but — unlike `save` — keeps the fact's
+        original `created_at` and `thread_id` instead of stamping fresh ones. Chosen because `save`
+        needs a `thread_id`, which an edit typed into the Memory page doesn't have, and re-dating an
+        edited fact to "now" would keep bumping it to the top of `all()`'s newest-first list, which
+        isn't what fixing a typo should do.
+
+        Raises KeyError if the key doesn't exist, so the API can 404 instead of silently creating a
+        new fact from a typo'd URL.
+        """
+        key = normalise_key(key)
+        got = self.store.get(ids=[f"{OWNER_ID}:{key}"], include=["metadatas"])
+        if not got["ids"]:
+            raise KeyError(key)
+        meta = dict(got["metadatas"][0])
+        meta["value"] = value.strip()[:MAX_VALUE_CHARS]
+        self.store.add_texts(texts=[f"{key}: {meta['value']}"], metadatas=[meta], ids=[f"{OWNER_ID}:{key}"])
+
     def all(self) -> list[dict]:
         """Every fact for the owner, newest first: [{"key", "value", "owner", "created_at",
         "thread_id"}, ...]. Filtered to OWNER_ID, like every read here."""

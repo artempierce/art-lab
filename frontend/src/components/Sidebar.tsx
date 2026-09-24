@@ -1,22 +1,25 @@
 /**
  * Sidebar.tsx — the left pane: the Art Lab logo with Arty, "New chat", the list of saved chats, a
- * collapsible Team section (X3), and placeholders for the Memory and Runs pages that come in later
- * phases.
+ * collapsible Team section (X3), and the Memory / Runs page-navigation buttons (Phase 12, P12).
  *
- * It only displays what App gives it and reports clicks back through onOpen / onNew. Team is the one
- * exception: it fetches its own data (see TeamList.tsx) since nothing else on the page needs it.
- * Style: the sage page with white cards (see .card, .btn-black in index.css); the open chat is orange.
+ * It only displays what App gives it and reports clicks back through onOpen / onNew / onNavigate.
+ * Team is the one exception: it fetches its own data (see TeamList.tsx) since nothing else on the
+ * page needs it. Style: the sage page with white cards (see .card, .btn-black in index.css); the
+ * open chat (or page) is orange.
  */
 import type { Thread } from '../api'
+import type { View } from '../App'
 import { Arty } from './Arty'
 import { TeamList } from './TeamList'
 
 type Props = {
   threads: Thread[] // chats to list, newest first
   error: string | null // shown instead of the list when loading failed
-  activeId: string | null // the open chat, highlighted
+  activeId: string | null // the open chat, highlighted (only meaningful while view === 'chat')
+  view: View // which page is open right now; highlights the matching nav button
   onOpen: (id: string) => void // a chat was clicked
   onNew: () => void // "New chat" was clicked
+  onNavigate: (view: View) => void // "Memory" or "Runs" was clicked
 }
 
 /** Turn an ISO timestamp into a short relative label: "just now", "5m ago", "3h ago", "2d ago". */
@@ -28,7 +31,7 @@ function timeAgo(iso: string): string {
   return `${Math.round(minutes / 60 / 24)}d ago`
 }
 
-export function Sidebar({ threads, error, activeId, onOpen, onNew }: Props) {
+export function Sidebar({ threads, error, activeId, view, onOpen, onNew, onNavigate }: Props) {
   return (
     // Hidden below 1024px wide (lg); App shows only the chat there.
     <aside className="hidden min-h-0 flex-col gap-5 border-r-2 border-ink bg-sage p-5 lg:flex">
@@ -70,14 +73,27 @@ export function Sidebar({ threads, error, activeId, onOpen, onNew }: Props) {
 
       <TeamList />
 
-      {/* Roadmap placeholders: Memory page (Phase 12) and Runs page (Phase 13). */}
-      <div className="border-t-2 border-ink pt-4">
-        <p className="mb-2 text-xs font-medium">Coming later</p>
+      {/* Page navigation: Memory (Phase 12, this ticket) and Runs (Phase 13, a placeholder here). */}
+      <nav aria-label="Pages" className="border-t-2 border-ink pt-4">
         <div className="flex gap-2">
-          <span className="btn-outline px-3 py-1 text-sm">Memory</span>
-          <span className="btn-outline px-3 py-1 text-sm">Runs</span>
+          <button
+            type="button"
+            onClick={() => onNavigate('memory')}
+            aria-current={view === 'memory' ? 'page' : undefined}
+            className={`btn-outline px-3 py-1 text-sm ${view === 'memory' ? 'bg-orange' : ''}`}
+          >
+            Memory
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate('runs')}
+            aria-current={view === 'runs' ? 'page' : undefined}
+            className={`btn-outline px-3 py-1 text-sm ${view === 'runs' ? 'bg-orange' : ''}`}
+          >
+            Runs
+          </button>
         </div>
-      </div>
+      </nav>
     </aside>
   )
 }
