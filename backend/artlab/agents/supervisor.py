@@ -152,7 +152,9 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
 
         Checked in order (docs/contracts.md §§ 3, 10, 13); each dispatch below (routing, a planned
         step, or a handoff) counts once towards the step limit, and its trace line ends with
-        " · step n/{MAX_STEPS}":
+        " · step n/{MAX_STEPS}". Every step-limit stop (A, C and D below) goes to `output_guard`
+        instead of straight to END (Phase 10, docs/contracts.md § 14) — the STEP_LIMIT_NOTICE it
+        appends is still an answer this turn produced, so it gets checked like any other:
           0. A worker left a data-changing tool call waiting for your Approve/Reject click
              (`pending_approval`, docs/contracts.md § 10): go straight there, before even asking
              whether the turn is "done" — a pending request means it isn't, whatever `answered_by`
@@ -195,7 +197,7 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
                     "stage": "arty", "status": "stopped",
                     "detail": f"stopped · step limit reached ({MAX_STEPS} steps)", "ms": ms_since(start),
                 })
-                return Command(update={"messages": [AIMessage(STEP_LIMIT_NOTICE)]}, goto=END)
+                return Command(update={"messages": [AIMessage(STEP_LIMIT_NOTICE)]}, goto="output_guard")
 
             worker = by_name[state["answered_by"]]
             artifact = {
@@ -244,7 +246,7 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
                     "stage": "arty", "status": "stopped",
                     "detail": f"stopped · step limit reached ({MAX_STEPS} steps)", "ms": ms_since(start),
                 })
-                return Command(update={"messages": [AIMessage(STEP_LIMIT_NOTICE)]}, goto=END)
+                return Command(update={"messages": [AIMessage(STEP_LIMIT_NOTICE)]}, goto="output_guard")
             write({
                 "stage": "arty", "status": "ok",
                 "detail": f"→ {handoff} · handoff · step {steps + 1}/{MAX_STEPS}", "ms": ms_since(start),
@@ -257,7 +259,7 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
                 "stage": "arty", "status": "stopped",
                 "detail": f"stopped · step limit reached ({MAX_STEPS} steps)", "ms": ms_since(start),
             })
-            return Command(update={"messages": [AIMessage(STEP_LIMIT_NOTICE)]}, goto=END)
+            return Command(update={"messages": [AIMessage(STEP_LIMIT_NOTICE)]}, goto="output_guard")
 
         decision, tokens_in, tokens_out = await route(state["messages"], state.get("memory", []))
         step_n = steps + 1
