@@ -35,6 +35,9 @@
   --color-t-rag: #c0341d; /* rag_agent */
   --color-t-tool: #1c6b48; /* tools */
   --color-t-human: #c0341d; /* blocked / errors */
+  --color-t-research: #0e6a93; /* youtube_researcher — 6.0:1 on white */
+  --color-t-ideas: #7b2d8e; /* content_ideator — 8.1:1 */
+  --color-t-coach: #a3205f; /* english_coach — 7.2:1 */
 }
 
 html,
