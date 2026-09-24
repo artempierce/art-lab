@@ -537,3 +537,57 @@ and returns an `AgentAnswer(text, spent_usd, tainted)` with `.pieces()` (source 
 |---|---|---|
 | H1 plan + artifacts | Sonnet (Opus review) | `agents/supervisor.py`, `agents/state.py`, `agents/guard.py` (reset plan/artifacts), `agents/workers.py` (`produces`), `model.py` (the fake router's plan only), `tests/test_handoffs.py` (new); existing route tests only where the plan changes them |
 | H2 agent as a tool | Sonnet (Opus review) | `tools/agents.py` (new), `tools/registry.py` (async tool support), `tools/catalog.py`, `agents/tool_loop.py` (depth, nested spend, trace prefix), `model.py` (FAKE_TOOL_HINTS only), `tests/test_agent_tools.py` (new) |
+
+## 14. Phase 10: output guard and turn caps
+
+Design book FR-12 (the output guard checks the final answer) and FR-5 (a run stops at max steps, max tokens or max
+seconds, with the best result so far). **Decision (2026-09-24, Sol): stream, then retract.** Answers keep streaming
+live; when a turn finishes, the guard checks it and replaces anything bad.
+
+**Output guard (`guards/output.py` + node `output_guard`):**
+- Placement: `remember → output_guard → END`. The step-limit and cap stop paths also go to `output_guard` instead of END
+  (answers streamed before the stop get checked too). `approval` → END stays as it is, because its reply is our own text.
+- It checks every AIMessage added **this turn** (after the turn's last HumanMessage). `check_output(text) -> OutputVerdict(ok,
+  reason, redacted_text)` runs, in order:
+  1. **Leaked prompt**: any sentence of 40 or more characters from our own system prompts (supervisor, respond,
+     rag_agent, the three workers, TOOL_RULES, REPHRASE and the extraction/summary prompts), matched case-insensitively
+     with whitespace collapsed. A hit replaces the whole message with *"[Withheld by the output guard: the answer
+     repeated Arty's internal instructions.]"*. The sentences are collected once at startup from the prompt constants
+     (`guards/output.prompt_sentences()`), so a new prompt is covered by adding it to that list.
+  2. **Internal tags**: `<untrusted_retrieval…>`, `</untrusted_retrieval>`, `<system>`, `<assistant>` in an answer are
+     **stripped** (the tags only; the text stays), reason "internal tags removed".
+  3. **Schema** (warn only, never redact): content_ideator's answer should contain 3 ideas (at least 3 lines starting
+     with a number or a bullet). Otherwise a trace warning `schema: expected 3 ideas`.
+- A changed message is written back **with the same `id`** (add_messages replaces it), so the saved chat is redacted too.
+- Trace: stage `guard`, detail `output ok` / `output: redacted (leaked prompt)` / `output: internal tags removed` /
+  `output: schema warning (expected 3 ideas)`; the status is `ok`, except `blocked` for a redaction.
+- **SSE `replace`** (api.py): after the stream, if the guard changed anything this turn, send
+  `event: replace` `data: {"text": <the turn's answer text joined exactly as it streamed, after redaction>}` before
+  `done`. The browser swaps the reply bubble's text.
+
+**Turn caps (FR-5):**
+- `MAX_TURN_SECONDS = 90` and `MAX_TURN_USD = 0.05` (the "max tokens" budget, expressed as cost because every node already
+  reports cost; that's about 25k Haiku tokens). They live in `guards/caps.py`, with comments on why.
+- State: `turn_started_at: float` (time.time()) and `turn_spent_start: float` (the chat's `spent_usd` at the turn start),
+  both set by the guard each turn. `caps.check(state) -> str | None` returns `"time"` / `"cost"` / None.
+- Enforced in two places:
+  1. **Supervisor**, before any dispatch (routing, a plan step, a handoff): over a cap → append `"Stopped at the turn's
+     <time|cost> limit. The answer above is the best result so far."`, trace status `stopped`, go to `output_guard`.
+  2. **Tool loop**, before each model call: workers pass `limits=caps.limits_from(state)` (a deadline and the spend left).
+     Over the limit → stop the loop, reply with the text so far or the stop notice, trace status `stopped`. Nested agent
+     calls (§ 13) inherit the caller's limits.
+- The fake model costs $0, so tests use scripted fakes with `usage_metadata` or monkeypatch the caps.
+
+**Frontend:** handle `replace` (swap the current reply bubble's text; the trace already shows why); add STATUS_ICON
+entries for `flagged` (⚑), `stopped` (■), `approval` (?) and `blocked` (already there).
+
+**Who owns what (Phase 10):**
+
+| Ticket | Model | Owns |
+|---|---|---|
+| G1 output guard | Sonnet (Opus review) | `guards/output.py` (new), `graph.py` (the node + edges), `api.py` (the `replace` event), `tests/test_output_guard.py` (new) |
+| G2 caps | Sonnet (Opus review) | `guards/caps.py` (new), `agents/state.py`, `agents/guard.py` (the turn start), `agents/supervisor.py` (cap checks; stop paths → `output_guard`), `agents/tool_loop.py` + the four workers + `tools/agents.py` (limits), `tests/test_caps.py` (new) |
+| G3 frontend | Sonnet | `frontend/src/api.ts`, `frontend/src/App.tsx`, `frontend/src/components/TracePanel.tsx` |
+
+G1 and G2 both need `output_guard` to exist as a node name. G2 routes its stop paths to `"output_guard"`, and G1 adds the
+node. Until both are merged, G2's tests can pass `workers=` and assert on the Command goto rather than on a full run.
