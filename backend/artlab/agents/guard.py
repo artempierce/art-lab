@@ -35,7 +35,7 @@ def make_node(classifier: InjectionClassifier | None = None):
                      deterministic path with no classifier at all (docs/contracts.md § 8).
     """
 
-    async def guard(state: ChatState) -> Command[Literal["recall", "__end__"]]:
+    async def guard(state: ChatState) -> Command[Literal["summarize", "__end__"]]:
         """Node 1 — run the input guard on the newest message, then either continue or stop.
 
         Steps:
@@ -87,7 +87,7 @@ def make_node(classifier: InjectionClassifier | None = None):
                 # shows, so you know a flagged message — not a tool result — is why it's asking.
                 return Command(
                     update={**update, "tainted": True, "taint_sources": ["guard classifier"], "turn_flagged": True},
-                    goto="recall",
+                    goto="summarize",
                 )
 
             if score >= THRESHOLD:
@@ -95,12 +95,12 @@ def make_node(classifier: InjectionClassifier | None = None):
                 write({"stage": "guard", "status": "flagged", "detail": detail, "ms": ms_since(start)})
                 return Command(
                     update={**update, "tainted": True, "taint_sources": ["guard classifier"], "turn_flagged": True},
-                    goto="recall",
+                    goto="summarize",
                 )
 
             detail += f" · classifier {score:.2f}"
 
         write({"stage": "guard", "status": "ok", "detail": detail, "ms": ms_since(start)})
-        return Command(update=update, goto="recall")
+        return Command(update=update, goto="summarize")
 
     return guard

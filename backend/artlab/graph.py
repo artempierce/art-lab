@@ -25,6 +25,8 @@ The graph today (Phase 7 — memory):
                 │
                pass
                 ▼
+            summarize   (only once the chat passes 30 messages: folds the old ones into one summary)
+                ▼
              recall ──▶ supervisor ──"respond"────▶ respond ─────┐   answers directly (small talk, general help)
      (loads state["memory"]) (main agent, Arty)  ──"rag_agent"─▶ rag_agent ─┤   searches the knowledge base, cites sources
                                  │  ▲                                  │
@@ -71,7 +73,7 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from artlab.agents import guard, recall, remember, supervisor
+from artlab.agents import guard, recall, remember, summarize, supervisor
 from artlab.agents.common import ms_since
 from artlab.agents.state import ChatState
 from artlab.agents.workers import WORKERS, WorkerSpec
@@ -182,7 +184,9 @@ def build_graph(
     # thread = one chat), which is also what makes `interrupt()`/resume possible — see the file header.
     graph = StateGraph(ChatState)
     graph.add_node("guard", guard.make_node(classifier))
+    graph.add_node("summarize", summarize.make_node(model))  # a pass-through until the chat is long
     graph.add_node("recall", recall.make_node(memory))
+    graph.add_edge("summarize", "recall")
     graph.add_node("supervisor", supervisor.make_node(model, workers), destinations=(*names, "approval", "remember", END))
     graph.add_node("remember", remember.make_node(model, memory))
     graph.add_node("approval", _make_approval_node(tools))
