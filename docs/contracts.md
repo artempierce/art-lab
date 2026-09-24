@@ -293,3 +293,82 @@ rag_agent have?"), and `GET /api/agents` returns it for the UI's Team list:
 | X3 capabilities | B | Sonnet | `agents/capabilities.py`, `agents/respond.py`, `api.py` (the endpoint), `frontend/src/{api.ts,components/Sidebar.tsx,components/TeamList.tsx}`, tests |
 | T10 register routes | C | Sonnet | `agents/workers.py`, `model.py` (fake router hints), `frontend/src/components/TracePanel.tsx` (stage colours), S1/S4 tests |
 | docs sync | end | Haiku | `README.md`, `docs/design.html`, `docs/execution-plan.md` |
+
+## 10. Phase 6: Approve / Reject for data-changing tools
+
+**Decision (2026-09-24, Sol): a tainted chat asks, with a warning.** Every data-changing ("mutating") tool now waits
+for your Approve click, and nothing runs without it. In a tainted chat the card also says the chat read untrusted
+content, and from where. This **replaces** § 4's "the tainted case stays refused": a human in between is exactly
+what the lethal-trifecta rule allows (execution-plan § 4a), and refusing would make "save those ideas" after research
+(S2 → S3) impossible.
+
+**Why the approval is its own node, not a pause inside the tool loop.** LangGraph's `interrupt()` pauses a node, and on
+resume **re-runs that node from its start**. Pausing inside the worker's loop would call the model again, and it could
+ask for *different* arguments than the ones you approved. So the worker only *records* the request, and a separate
+`approval` node, which just reads state, pauses and later runs **exactly the stored arguments**.
+
+**State (`agents/state.py`):**
+
+| Field | Type · reducer | Meaning |
+|---|---|---|
+| `pending_approval` | `dict \| None` · overwrite | the request waiting for you: `{id, agent, tool, args, tainted, taint_sources}`; `None` when nothing waits |
+| `taint_sources` | `list[str]` · add, de-duplicated | where untrusted content came from, e.g. `"fetch_comments"`, `"search_knowledge"`, `"guard classifier"` |
+
+Every place that sets `tainted: True` also adds its source name (the tool loop, rag_agent, the guard's classifier).
+
+**Gateway (`tools/registry.py`):**
+- `check()`: a mutating tool now raises **`ApprovalRequired(ToolDenied)`**, tainted or not. The model's request is never
+  run directly. Unknown tools and allow-list failures still raise plain `ToolDenied`.
+- `run_approved(agent, name, args) -> ToolResult`: runs a mutating tool **only** from the approval node, after your
+  click. It re-checks the allow-list and runs through the same timeout/retry/wrapping. No model can reach it: it isn't a tool.
+
+**Tool loop (`agents/tool_loop.py`):** on `ApprovalRequired`, stop the loop at once and don't call the model again. Return
+`LoopResult(..., pending={id: uuid4, agent, tool, args, tainted: tainted_in or tainted_so_far, taint_sources})` with the
+reply *"I'd like to run <tool>: waiting for your approval."* Write a trace line: stage `tool`, status `approval`.
+Every other tool call requested in the same reply gets a ToolMessage "skipped: waiting for approval".
+The worker returns `pending_approval` in its update.
+
+**Graph:**
+- New node **`approval`**, built once in `graph.py` (not a worker, and not in `WORKERS`):
+  1. `decision = interrupt({"id", "agent", "tool", "args", "tainted", "taint_sources"})`. The run pauses here; the
+     checkpointer saves it.
+  2. On resume, `decision` is `{"id": ..., "approve": bool}`. A wrong `id` is treated as reject (a stale card).
+  3. Approve → `await tools.run_approved(agent, tool, args)` → AIMessage with the tool's result text (e.g. "Saved 3 ideas
+     to data/ideas/2026-09-24.md"), trace `tool … · approved · ok`. Reject → AIMessage "OK, nothing was saved.", trace
+     `… · rejected`.
+  4. Return `pending_approval: None`, `answered_by` unchanged, and go to END.
+- The supervisor: if `pending_approval` is set → go to `approval` (before the "done" check).
+
+**API:**
+- `/api/chat`: when the stream ends paused (`(await graph.aget_state(config)).next == ("approval",)`), send
+  **`event: approval`** `data: {id, agent, tool, args, tainted, taint_sources}`, then `done` as usual.
+- **`POST /api/chat/resume`** `{thread_id, id, approve}`: streams the continuation with the same events
+  (`start`, `trace`, `token`, `done`/`error`) by running `graph.astream(Command(resume={"id": id, "approve": approve}), config, …)`.
+  404 if nothing is pending; 409 if `id` doesn't match the pending one.
+- A new `/api/chat` message while a request is still pending **auto-rejects it first** (trace line "pending approval
+  cancelled by a new message"), then runs the message. You can't leave a stale card that is approved later.
+
+**`save_ideas`** (`tools/ideas.py`): `save_ideas(ideas: str) -> str` appends a dated section to `data/ideas/<YYYY-MM-DD>.md`
+(creating the folder) and returns `"Saved to data/ideas/<date>.md"`. Tier `mutating`, allowed for `content_ideator`,
+`untrusted_output=False` (the confirmation is our own text). Markdown in `ideas` is written as-is. It's a local file, never
+sent anywhere.
+
+**content_ideator** gets the recent conversation (the last 4 messages) along with its task, so "save those ideas" can
+see the ideas it wrote last turn. `run_tool_loop(..., history=...)`: optional messages placed between the system prompt
+and the task.
+
+**Fake model:** tools named in `FAKE_TOOL_HINTS` (`{"save_ideas": r"\bsave\b"}`) are only called when their hint
+matches the task. Other tools keep § 9's "call the first tool" behaviour. So "3 video ideas" answers directly and
+"Save those ideas" asks for `save_ideas`.
+
+**Frontend:** an `approval` event shows an **Approve / Reject card** under the reply: the agent, the tool, and a preview of
+the args (the ideas text, scrollable). If `tainted`, a warning line: *"This chat read untrusted content (<sources>).
+Check the text before approving."* The buttons call `/api/chat/resume` and stream the continuation into the same chat
+and trace panel. The card disables itself after a click.
+
+**Who owns what (Phase 6):**
+
+| Ticket | Model | Owns |
+|---|---|---|
+| P6a backend | Sonnet (Opus review) | `agents/state.py`, `agents/tool_loop.py`, `agents/supervisor.py`, `agents/content_ideator.py`, `agents/rag_agent.py` + `agents/guard.py` (taint_sources only), `graph.py`, `api.py`, `tools/registry.py`, `tools/ideas.py` (new), `tools/catalog.py`, `model.py` (FAKE_TOOL_HINTS), tests |
+| P6b frontend | Sonnet | `frontend/src/api.ts`, `frontend/src/App.tsx`, `frontend/src/components/ChatView.tsx`, `frontend/src/components/ApprovalCard.tsx` (new) |
