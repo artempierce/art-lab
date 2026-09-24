@@ -71,7 +71,13 @@ FACTS_PATTERN = re.compile(r"\bmy (\w+(?: \w+)?) is ([^.,!?]+)", re.IGNORECASE)
 # me 3 ideas", which never asks to save anything. Phase 8 (§ 12) made `_reply_with_tools` walk every
 # bound tool in order instead of only ever looking at the first one, so a worker whose first tool's
 # hint doesn't match (save_ideas) can still fall through to a later one that does (load_skill, below).
-FAKE_TOOL_HINTS: dict[str, re.Pattern] = {"save_ideas": re.compile(r"\bsave\b", re.IGNORECASE)}
+FAKE_TOOL_HINTS: dict[str, re.Pattern] = {
+    "save_ideas": re.compile(r"\bsave\b", re.IGNORECASE),
+    # Phase 9b (docs/contracts.md § 13): content_ideator's ask_youtube_researcher (tools/agents.py) —
+    # a task that mentions trends or asks for research gets sent to youtube_researcher first, the same
+    # crude stand-in for "the model decided this needs another agent's answer".
+    "ask_youtube_researcher": re.compile(r"\b(trend\w*|research)\b", re.IGNORECASE),
+}
 
 # Phase 8 (docs/contracts.md § 12): a crude stand-in for the model recognising which skill a task
 # needs, since the fake can't read a loaded skill's own description the way a real model would. The

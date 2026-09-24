@@ -18,6 +18,7 @@ actually run, the next (and last) model call is made with no tools bound at all,
 choice but to answer in text. Worst case: MAX_TOOL_CALLS + 1 model calls.
 """
 
+import contextvars
 import inspect
 import time
 from dataclasses import dataclass, field
@@ -36,6 +37,17 @@ from artlab.tools.registry import ApprovalRequired, ToolDenied, ToolRegistry
 # many the model asks for. It bounds a worker's cost and latency even against a model that keeps asking
 # for more, and it's what makes `run_tool_loop` provably finish (see step 4 below).
 MAX_TOOL_CALLS = 3
+
+# Phase 9b (docs/contracts.md § 13): how an `ask_<callee>` tool (tools/agents.py) learns the calling
+# agent's name and its current taint status, without changing every plain tool's own signature to
+# carry them. `run_tool_loop` sets both, for the span of one `tools.call(...)` await, right before
+# making that call; `ask_<callee>` reads them back with `.get()` once its coroutine starts running.
+# This works because a Python `contextvar` is visible across an `await` *within the same asyncio
+# task* — exactly the path from "this loop awaits tools.call" to "tools.call awaits ask_<callee>'s own
+# coroutine" (registry.py awaits an async tool function directly, never in a worker thread, which is
+# what keeps this one task the whole way down; see tools/registry.py's `_run`).
+caller_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar("caller_ctx", default=None)
+tainted_in_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar("tainted_in_ctx", default=False)
 
 # Appended to every worker's own system prompt. Tool results are wrapped in <untrusted_retrieval> by
 # the gateway (tools/registry.py) before the model ever sees them — this tells the model what that
@@ -104,6 +116,8 @@ async def run_tool_loop(
     tainted_in: bool,
     taint_sources_in: list[str] = (),
     history: list[BaseMessage] | None = None,
+    depth: int = 0,
+    caller: str | None = None,
 ) -> LoopResult:
     """Run one worker turn: let the model call `agent`'s allowed tools, up to MAX_TOOL_CALLS times,
     then return its final text answer.
@@ -124,6 +138,16 @@ async def run_tool_loop(
                           content_ideator uses this for the chat's recent turns, so "save those ideas"
                           can see the ideas it wrote last time (docs/contracts.md § 10). `None` (most
                           workers) means no history at all, the same as before Phase 6.
+        depth:            Phase 9b (docs/contracts.md § 13): 0 for every ordinary worker turn; 1 for
+                          the nested loop an `ask_<callee>` tool (tools/agents.py) runs on the callee's
+                          behalf. At depth 1, `ask_*` tools are dropped from what's offered to the
+                          model (step 1) and refused if requested anyway (step 3) — that's the whole
+                          depth cap: an agent can be *asked*, but it can never itself ask another agent.
+        caller:           Phase 9b: the agent that asked this loop to run, via `ask_<callee>` — `None`
+                          for an ordinary (depth 0) turn. Only changes what the trace lines say (every
+                          line this loop writes gets `"↳ for <caller> · "` in front of its detail), so
+                          the trace panel can tell a nested call apart from that same worker answering
+                          its own turn.
 
     Steps (docs/contracts.md § 9):
         1. Look up `agent`'s tools and bind them to the model — or use the model unbound if it has
@@ -157,8 +181,24 @@ async def run_tool_loop(
     """
     write = get_stream_writer()
 
-    # 1. This agent's tools, bound to the model — or the plain model if it has none.
+    def _write(payload: dict) -> None:
+        """Write one trace line, prefixing its detail with `caller`'s name when this loop is the
+        *nested* one an `ask_<callee>` tool started (Phase 9b, docs/contracts.md § 13) — every line
+        this function writes goes through here instead of calling `write` directly, so a nested call's
+        whole trace (its own model-call lines and any tool lines) reads "↳ for content_ideator · …",
+        telling it apart from that same worker answering its own turn."""
+        if caller:
+            payload = {**payload, "detail": f"↳ for {caller} · {payload['detail']}"}
+        write(payload)
+
+    # 1. This agent's tools, bound to the model — or the plain model if it has none. Phase 9b's depth
+    # cap (docs/contracts.md § 13): at depth 1 (inside a nested loop an `ask_<callee>` tool started),
+    # no `ask_*` tool is offered at all — that's half of what stops an agent from calling another agent
+    # from inside a call it's already answering; the other half is the refusal below, for a model that
+    # asks for one anyway despite never seeing it in its own tool list.
     specs = tools.specs_for(agent)
+    if depth >= 1:
+        specs = [spec for spec in specs if not spec["function"]["name"].startswith("ask_")]
     bound_model = model.bind_tools(specs) if specs else model
 
     # 2. The messages every call in this loop builds on: system rules, optional history, then the task.
@@ -194,7 +234,7 @@ async def run_tool_loop(
         tokens_in, tokens_out = tokens_used(reply)
         spent_usd += cost_usd(tokens_in, tokens_out)
         action = f"asks for {', '.join(c['name'] for c in reply.tool_calls)}" if reply.tool_calls else "answer"
-        write({
+        _write({
             "stage": agent, "status": "ok",
             "detail": f"{model_name(model)} · {tokens_in} in / {tokens_out} out · {action}",
             "ms": ms_since(start), "input_tokens": tokens_in, "output_tokens": tokens_out,
@@ -219,7 +259,7 @@ async def run_tool_loop(
                 messages.append(ToolMessage(
                     f"the tool budget ({MAX_TOOL_CALLS} calls) is used up for this turn", tool_call_id=call_id,
                 ))
-                write({
+                _write({
                     "stage": "tool", "status": "stopped",
                     "detail": f"{name} · tool budget ({MAX_TOOL_CALLS}) used up", "ms": ms_since(start),
                 })
@@ -230,6 +270,19 @@ async def run_tool_loop(
             # counts against the budget.
             requested += 1  # counted before the checks: a refused or malformed call uses budget too
             tainted_now = tainted_in or tainted_so_far
+
+            # Phase 9b's depth cap, part two (docs/contracts.md § 13): even though `ask_*` tools were
+            # never offered at depth 1 (step 1, above), nothing stops an injected comment or a model
+            # that ignores its own tool list from *asking* for one anyway — so the loop refuses it
+            # explicitly here too, before the gateway even sees it. This still counts against the
+            # budget (`requested` was already bumped just above), the same as any other refusal, so a
+            # model that keeps trying this can't loop forever for free.
+            if depth >= 1 and name.startswith("ask_"):
+                reason = "agents can't call agents from inside another agent's call (depth limit 1)"
+                messages.append(ToolMessage(f"refused: {reason}", tool_call_id=call_id))
+                _write({"stage": "tool", "status": "error", "detail": f"{name} · refused · {reason}", "ms": ms_since(start)})
+                continue
+
             try:
                 tool = tools.check(agent, name, tainted_now)
             except ApprovalRequired:
@@ -240,7 +293,7 @@ async def run_tool_loop(
                 # answered but never run.
                 for other in reply.tool_calls[idx + 1:]:
                     messages.append(ToolMessage("skipped: waiting for approval", tool_call_id=other["id"]))
-                write({
+                _write({
                     "stage": "tool", "status": "approval",
                     "detail": f"{name} · waiting for your approval", "ms": ms_since(start),
                 })
@@ -255,21 +308,37 @@ async def run_tool_loop(
                 )
             except ToolDenied as exc:
                 messages.append(ToolMessage(f"refused: {exc}", tool_call_id=call_id))
-                write({"stage": "tool", "status": "error", "detail": f"{name} · refused · {exc}", "ms": ms_since(start)})
+                _write({"stage": "tool", "status": "error", "detail": f"{name} · refused · {exc}", "ms": ms_since(start)})
                 continue
 
             # Arguments that don't fit the tool's real signature — also never run, also free.
             bad = _bad_arguments(tool.fn, args)
             if bad is not None:
                 messages.append(ToolMessage(f"bad arguments: {bad}", tool_call_id=call_id))
-                write({"stage": "tool", "status": "error", "detail": f"{name} · bad arguments · {bad}", "ms": ms_since(start)})
+                _write({"stage": "tool", "status": "error", "detail": f"{name} · bad arguments · {bad}", "ms": ms_since(start)})
                 continue
 
             # It actually runs now: through the gateway, so the tier check, retry, arrival scan and
-            # wrapping (§ 4) all happen exactly as they would for any other caller.
-            result = await tools.call(agent, name, tainted=tainted_now, **args)
+            # wrapping (§ 4) all happen exactly as they would for any other caller. Phase 9b
+            # (docs/contracts.md § 13): `caller_ctx`/`tainted_in_ctx` are set for exactly the span of
+            # this one await, so if `name` is `ask_<callee>`, its coroutine (tools/agents.py) can read
+            # back who's asking and whether this chat already read untrusted content — see the module
+            # docstring above for why a contextvar, not a new tool argument, carries this through.
+            caller_token = caller_ctx.set(agent)
+            tainted_token = tainted_in_ctx.set(tainted_now)
+            try:
+                result = await tools.call(agent, name, tainted=tainted_now, **args)
+            finally:
+                caller_ctx.reset(caller_token)
+                tainted_in_ctx.reset(tainted_token)
             calls_run += 1
             tainted_so_far = tainted_so_far or result.untrusted
+            # Phase 9b's shared budget (docs/contracts.md § 13): an `ask_<callee>` tool's result is an
+            # `AgentAnswer` carrying the nested loop's own `spent_usd` on `.data` — added in here so the
+            # caller's `LoopResult.spent_usd` covers every model call the whole turn made, nested ones
+            # included. `getattr(..., 0.0)` makes this a no-op for every other tool, whose `.data` has
+            # no such attribute.
+            spent_usd += getattr(result.data, "spent_usd", 0.0)
             if result.untrusted and name not in taint_sources_so_far:
                 taint_sources_so_far.append(name)
             messages.append(ToolMessage(result.text, tool_call_id=call_id))
@@ -281,9 +350,9 @@ async def run_tool_loop(
                 skill_name = args.get("name")
                 unknown = isinstance(result.data, str) and result.data.startswith("No skill named")
                 detail = f"unknown skill {skill_name!r}" if unknown else f"loaded {skill_name}"
-                write({"stage": "skill", "status": "ok" if result.ok else "error", "detail": detail, "ms": ms_since(start)})
+                _write({"stage": "skill", "status": "ok" if result.ok else "error", "detail": detail, "ms": ms_since(start)})
             else:
                 detail = f"{name} [{tool.tier.replace('_', '-')}] · {'ok' if result.ok else 'failed'} · {result.attempts}"
                 if result.flagged:
                     detail += " · flagged"
-                write({"stage": "tool", "status": "ok" if result.ok else "error", "detail": detail, "ms": ms_since(start)})
+                _write({"stage": "tool", "status": "ok" if result.ok else "error", "detail": detail, "ms": ms_since(start)})

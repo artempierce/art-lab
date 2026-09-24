@@ -212,10 +212,13 @@ def create_app(
             if saver is None:
                 DB_PATH.parent.mkdir(exist_ok=True)
                 saver = await stack.enter_async_context(AsyncSqliteSaver.from_conn_string(str(DB_PATH)))
-            tools = build_tools(knowledge or KnowledgeBase(), ideas_dir or IDEAS_DIR)
+            # Resolved once, up front: every worker's own turn and the nested turn
+            # `ask_youtube_researcher` runs (Phase 9b, docs/contracts.md § 13) share this one model.
+            chat_model = model or make_model()
+            tools = build_tools(knowledge or KnowledgeBase(), ideas_dir or IDEAS_DIR, model=chat_model)
             app.state.checkpointer = saver
             app.state.tools = tools
-            app.state.graph = build_graph(model or make_model(), saver, tools, memory or MemoryStore(), classifier=classifier)
+            app.state.graph = build_graph(chat_model, saver, tools, memory or MemoryStore(), classifier=classifier)
             yield
 
     app = FastAPI(title="Art Lab", lifespan=lifespan)
