@@ -68,7 +68,7 @@ What happens when you ask *"Who needs to approve a $900 equipment purchase?"*:
 9. The worker answers from the tool results; nothing relevant → "I couldn't find that in the knowledge base", with no model call. The sources are attached to the reply.
 10. Back at the **supervisor**: someone answered and step count increments, or the agent hands back an artifact for the next worker. Handoffs and step limits are managed here. When done, the supervisor finishes.
 11. **`agents/remember.py`**: after the supervisor finishes, extract ≤3 durable facts from *only your message* (not tool output or documents), upsert to long-term memory by key. Flagged messages are skipped.
-12. **`agents/output_guard.py`**: checks the answer for leaked system-prompt sentences (withheld if found), internal tags (stripped), and content_ideator without 3 ideas (warning added). If changes are made, streams a `replace` SSE event so the chat bubble updates live with a "Redacted by the output guard" note.
+12. **The `output_guard` node** (`guards/output.py`): checks the answer for leaked system-prompt sentences (withheld if found), internal tags (stripped), and content_ideator without 3 ideas (warning added). If changes are made, streams a `replace` SSE event so the chat bubble updates live with a "Redacted by the output guard" note.
 13. **`api.py`** streams it all as it happens: `start` → `trace` / `token` … → `done` (tokens, cost, time, sources).
 14. **`App`** grows the reply as tokens arrive, adds trace lines to **`TracePanel`**, and shows **Sources** under the answer.
 
