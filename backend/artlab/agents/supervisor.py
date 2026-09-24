@@ -78,12 +78,15 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
 
         If it's still invalid after the retry, fall back to "respond" instead of failing the turn —
         the fallback's own `reason` says so, which lands in the trace line the caller writes.
-        Returns (decision, input_tokens, output_tokens).
+        Returns (decision, input_tokens, output_tokens), counting BOTH calls when it retried: an
+        invalid answer is still billed, so it must count towards the cost and the chat's budget.
         """
         out = await router.ainvoke([SystemMessage(prompt), *messages])
+        tokens_in, tokens_out = tokens_used(out["raw"])
         if out["parsed"] is None:
             out = await router.ainvoke([SystemMessage(prompt), *messages])  # one retry (§ 3)
-        tokens_in, tokens_out = tokens_used(out["raw"])
+            retry_in, retry_out = tokens_used(out["raw"])
+            tokens_in, tokens_out = tokens_in + retry_in, tokens_out + retry_out
         if out["parsed"] is not None:
             return out["parsed"], tokens_in, tokens_out
         fallback = RouteDecision(
