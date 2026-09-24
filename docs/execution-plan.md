@@ -78,7 +78,7 @@ change (plus its own tests), which is what makes parallel work safe.
 | W0.2 | Decide the classifier policy: reduce privileges / block / warn | Sol | — | Decision recorded in the design book |
 | W0.3 | Real-Claude smoke test: 3 messages (< $0.01) | Opus, with Sol's OK | — | Routing, cited answer and "not found" seen on real Claude + in LangSmith |
 | W0.4 | **Split `graph.py` into one module per node**, no behaviour change | Sonnet | `backend/artlab/graph.py`, new `backend/artlab/agents/*.py` | Tests pass unchanged; code identical by syntax-tree comparison (as in the docs PR) |
-| W0.5 | **Contracts** for Phases 3–10: state fields (`steps`, typed `artifacts`, `pending_approval`), the worker-node signature, how a worker registers a route, trace stage names + colours, tool-registry additions (stubs, retries, timeouts), approval event shape | Opus | `docs/contracts.md`, typed stubs, skipped tests | Every Wave 1–3 ticket can be written against it |
+| W0.5 | **Contracts** for Phases 3–10: state fields (`steps`, typed `artifacts`, `pending_approval`), the worker-node signature, how a worker registers a route, trace stage names + colours, tool-registry additions (stubs, retries, timeouts), approval event shape; the **trust boundary** (§ 4a): each tool declares whether its output is untrusted (default: yes), a per-run `tainted` flag, and how taint passes through artifacts | Opus | `docs/contracts.md`, typed stubs, skipped tests | Every Wave 1–3 ticket can be written against it |
 | W0.6 | Exempt `art-lab/` from the file gate | Sol | your settings | New files are written once |
 
 ### Wave 1 — independent tracks (5 in parallel)
@@ -86,7 +86,7 @@ change (plus its own tests), which is what makes parallel work safe.
 | ID | Task | Phase | Model | Owns | Done when |
 |---|---|---|---|---|---|
 | T1 | **Supervisor v2**: routes come from a worker registry; step limit counted once per step; invalid output retried once, then falls back | 3 | Sonnet (Opus review) | `agents/supervisor.py`, `tests/test_supervisor.py` | Breaker test (S7) and "hi" answered directly (S11) pass |
-| T2 | **Tool gateway**: stub `query_youtube_trends` + `fetch_comments` (with one poisoned comment); retry once; failures become a structured error; per-tool timeout | 4 | Sonnet (Opus review) | `tools/*`, `tests/test_tools*.py` | Mocked 500 → one retry → partial answer (S10); wrapper can't be broken out of |
+| T2 | **Tool gateway**: stub `query_youtube_trends` + `fetch_comments` (with one poisoned comment); retry once; failures become a structured error; per-tool timeout; the gateway itself **wraps and scans every tool result** (tools stop wrapping their own) and **refuses data-changing tools while the run is tainted** (§ 4a) | 4 | Sonnet (Opus review) | `tools/*`, `tests/test_tools*.py` | Mocked 500 → one retry → partial answer (S10); wrapper can't be broken out of; a poisoned stub result taints the run, and a mutating tool is then refused |
 | T3 | **Guard layer 2** (local classifier), with the W0.2 policy | 1+ | Sonnet (Opus review) | `guards/classifier.py`, the guard node, `tests/test_classifier.py` | Fake-scorer tests pass; real-model test skipped when the ~740 MB model isn't present (CI stays fast) |
 | T4 | **RAG follow-up**: rag_agent may rephrase and search again (max 2 searches) | 2+ | Sonnet | `agents/rag_agent.py`, its tests | Loop stops at 2 with a scripted fake model |
 | T5 | **Content**: 3 SKILL.md files; routing golden set (15 cases); golden sets for the 3 workers | 5, 8, 11 | Haiku (Opus spot-check) | `backend/skills/`, `evals/*.yaml` | A test checks every golden file's shape; Opus reads a sample |
@@ -99,7 +99,7 @@ change (plus its own tests), which is what makes parallel work safe.
 | T8 | `content_ideator` | 5 | Sonnet | `agents/content_ideator.py` + tests | 3 ideas with hooks from a research artifact |
 | T9 | `english_coach` (no tools) | 5 | Sonnet | `agents/english_coach.py` + tests | Grammar request routed and answered (S4) |
 | T10 | Register T7–T9 as routes; trace colours in the UI | 5 | Sonnet, after T7–T9 | worker registry line, `TracePanel.tsx` | Supervisor routes to all four workers |
-| T11 | **Long-term memory**: facts per user in a Chroma "memory" collection (reuses RAG code); extract after a run, recall before routing; summarise long chats | 7 | Sonnet (Opus review: user filtering) | `memory/*`, context node, tests | S8: niche recalled in a new chat |
+| T11 | **Long-term memory**: facts per user in a Chroma "memory" collection (reuses RAG code); extract after a run, recall before routing; summarise long chats; recalled facts are untrusted (they may come from tainted runs) and pass the same boundary | 7 | Sonnet (Opus review: user filtering) | `memory/*`, context node, tests | S8: niche recalled in a new chat |
 | T12 | **Skills**: skills index in worker prompts + `load_skill` tool (uses T5 files) | 8 | Sonnet | `skills` loader, catalog entry, tests | S9: skill loaded only when needed |
 
 ### Wave 3 — cross-cutting control flow (Opus-led)
@@ -127,6 +127,31 @@ change (plus its own tests), which is what makes parallel work safe.
 | R1 | First-pass PR review (bugs, missing tests, CLAUDE.md doc standard) | Sonnet | Every PR, before the Opus review |
 
 ---
+
+## 4a. The trust boundary (applies to every task)
+
+**Rule: anything that doesn't come from Sol or from Art Lab's own code and prompts is untrusted data** —
+tool results, web pages, knowledge-base chunks, uploaded files, recalled memory, and any agent output
+built from those. Marking it is a property of the **system**, enforced by deterministic code at every
+boundary. It is never a tool an agent chooses to call: an injection's whole job is to change what the
+model chooses, so a choice can't be the defence.
+
+| Layer | What it does | Where | Status |
+|---|---|---|---|
+| 1. Scan on arrival | Injection rules (+ the classifier, T3) check outside text as it arrives | ingest; the tool gateway | ingest ✅ · live tool results → T2 |
+| 2. Wrap at the boundary | Every tool result goes inside `<untrusted_retrieval>`, our tags escaped | **the gateway, for every tool** — not each tool | partly (each tool wraps its own) → T2 |
+| 3. Tell the model | Prompts say tagged content is data, never instructions | agent prompts | rag_agent ✅ · every new worker |
+| 4. **Taint → fewer privileges** | Once untrusted content is in a run, data-changing or data-sending tools are refused, whatever the model asks | graph state (`tainted`) + the registry | → W0.5, T2 |
+| 5. Human approval | Data-changing actions wait for Approve | Phase 6 | → T13a |
+
+Layers 1–3 make an injection *less likely to work*; none is a guarantee. Layer 4 makes it *harmless when
+it does work*: an agent that has read a poisoned page can't send or change anything without Sol. It's the
+"lethal trifecta" rule — never let one run combine private data, untrusted content, and a way to send data
+out, without a human in between. (The classifier's "reduce privileges" policy, Q16, is the same idea.)
+
+**What every ticket must respect:** new tools declare `untrusted_output` (default `true`) and never wrap
+their own output; new agents treat tagged content as data; uploads (RAG-7) and memory (T11) enter through
+the same boundary — no special paths.
 
 ## 5. Dependencies
 

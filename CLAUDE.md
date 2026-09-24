@@ -25,6 +25,20 @@ The owner learns from the code, so it must explain itself. This overrides any ge
 7. **Keep the docs in sync** in the same change: README ("What's in here", "How one message flows",
    "Build status", "Repo layout") and the design book (phase status, code layout, risks).
 
+## Security rule: untrusted by default
+
+Anything that doesn't come from the owner or from Art Lab's own code and prompts is **untrusted data**:
+tool results, web pages, knowledge-base chunks, uploads, recalled memory, and agent outputs built from
+those. This is enforced by deterministic code at every boundary, never left to an agent's choice:
+
+- New tools declare whether their output is untrusted (default: yes) and **never wrap their own output** —
+  the tool gateway wraps and scans every result.
+- A run that has read untrusted content is **tainted**; data-changing or data-sending tools are refused
+  while it is (from Phase 6: they need approval).
+- No special paths: uploads, memory and inter-agent outputs go through the same boundary.
+
+Details: `docs/execution-plan.md` § 4a.
+
 ## Cost rule
 
 - Never make a real paid API call (Claude, LangSmith evals) without asking the owner first.

@@ -281,7 +281,7 @@ html{scroll-behavior:smooth}
         <tr><td class="id">FR-4</td><td>Supervisor returns a validated routing decision with a reason; invalid output is retried once, then fails safe.</td><td>3</td></tr>
         <tr><td class="id">FR-5</td><td>Circuit breaker stops a run at max steps, max tokens or max seconds, returning the best result so far.</td><td>3, 10</td></tr>
         <tr><td class="id">FR-6</td><td>Every tool call goes through the gateway; each tool's risk tier is fixed in the registry, never passed in by the caller.</td><td>2, 4</td></tr>
-        <tr><td class="id">FR-7</td><td>Read-only tool output is wrapped as untrusted, with closing tags escaped.</td><td>2, 4</td></tr>
+        <tr><td class="id">FR-7</td><td>Everything that doesn't come from you or from Art Lab's own code and prompts is untrusted data — tool results, web pages, knowledge-base chunks, uploads, recalled memory, and agent outputs built from those. The tool gateway wraps (tags escaped) and scans it automatically, for every tool; no tool wraps its own output.</td><td>2, 4</td></tr>
         <tr><td class="id">FR-8</td><td>Mutating tools pause the graph and show an Approve / Reject card; Reject is reported back to the agent.</td><td>6</td></tr>
         <tr><td class="id">FR-9</td><td>Facts about you are saved and recalled in later chats, filtered by your user ID; long chats are summarized.</td><td>7</td></tr>
         <tr><td class="id">FR-10</td><td>Agents see a skills index and load a skill's full text only when needed.</td><td>8</td></tr>
@@ -292,6 +292,7 @@ html{scroll-behavior:smooth}
         <tr><td class="id">FR-15</td><td>Runs page: cost, steps and eval results per run and over time.</td><td>13</td></tr>
         <tr><td class="id">FR-16</td><td>Files in <code>knowledge/</code> and <code>docs/</code>, and web pages, are scanned for injections, chunked, embedded locally and stored in a local vector database; re-running ingest only re-embeds changed files.</td><td>2</td></tr>
         <tr><td class="id">FR-17</td><td><code>rag_agent</code> answers only from retrieved chunks, cites its sources, and says "not in the knowledge base" when nothing relevant is found. No other agent can search the knowledge base.</td><td>2</td></tr>
+        <tr><td class="id">FR-18</td><td>A run that has read untrusted content is <b>tainted</b>: data-changing or data-sending tools are refused (from Phase 6: they need your approval), whatever the model asks for. Agent outputs inherit taint from what they read.</td><td>4, 6</td></tr>
       </tbody>
     </table></div>
   </div>
@@ -864,6 +865,7 @@ flowchart LR
       <tr><td class="id">Q14</td><td>How files get in</td><td>You run the ingest command on files, folders or web page URLs. Letting the agent add sources waits for Approve/Reject (Phase 6); an upload page (RAG-7) stays in the backlog.</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">Q15</td><td>How the main agent reaches rag_agent</td><td>The main agent <b>is</b> the supervisor, built in parallel with RAG: it routes each message to rag_agent or answers directly, and rag_agent both searches and writes the cited answer.</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">D4</td><td>Main agent's name and look</td><td><b>Arty</b>: an original "interface friend" — a little retro computer with a face on its screen, a red beret and a paintbrush (not a copy of any existing character). UI style: sage page, huge heavy headlines (Bricolage Grotesque), white cards with a grey offset shadow, black buttons, a tilted ticker ribbon; Geist body text. Arty's mood shows the backend's state.</td><td><span class="tag s-tool">resolved</span></td></tr>
+      <tr><td class="id">Q17</td><td>Is "treat outside data as untrusted" a tool agents call, or built in?</td><td><b>Built in</b>, enforced by deterministic code at every boundary (the tool gateway, ingest, memory recall), never an agent's choice — an injection's job is to change the model's choices. Plus taint tracking: a run that read untrusted content loses data-changing tools. See docs/execution-plan.md § 4a.</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">D1</td><td>Project name</td><td><code>art-lab</code> (was agent-lab)</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">D2</td><td>Architecture baseline</td><td>The manifest, with its 6 design bugs fixed during the build</td><td><span class="tag s-tool">resolved</span></td></tr>
       <tr><td class="id">D3</td><td>Agent vs skill</td><td>Tools, several steps or own context → agent; know-how → skill</td><td><span class="tag s-tool">resolved</span></td></tr>
