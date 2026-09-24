@@ -6,6 +6,7 @@ Endpoints:
     POST /api/chat                 send one message; the reply streams back as server-sent events
     GET  /api/threads              list all chats, newest first (the left sidebar)
     GET  /api/threads/{thread_id}  one chat's full history, with each answer's sources
+    GET  /api/agents               the team and their tools, for the sidebar's Team panel (X3)
 
 How POST /api/chat streams. The response is *server-sent events* (SSE): a long-lived HTTP
 response made of small text blocks, each one looking like
@@ -40,7 +41,9 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel, Field
 
+from artlab.agents.capabilities import team
 from artlab.agents.common import text_of
+from artlab.agents.workers import WORKERS
 from artlab.config import DB_PATH, REPO_ROOT
 from artlab.graph import build_graph
 from artlab.guards.classifier import InjectionClassifier, load_classifier
@@ -103,6 +106,8 @@ def create_app(
 
         Opens the chat database (unless a checkpointer was passed in), opens the knowledge base, builds
         the tool registry and the graph, and stores them on `app.state` for the endpoints to use.
+        `app.state.tools` is the same registry the graph's workers call through — GET /api/agents (X3)
+        reads it, so the Team panel can never show a tool the workers don't actually have.
         `AsyncExitStack` closes the database connection cleanly when the server stops.
         """
         async with AsyncExitStack() as stack:
@@ -112,6 +117,7 @@ def create_app(
                 saver = await stack.enter_async_context(AsyncSqliteSaver.from_conn_string(str(DB_PATH)))
             tools = build_tools(knowledge or KnowledgeBase())
             app.state.checkpointer = saver
+            app.state.tools = tools
             app.state.graph = build_graph(model or make_model(), saver, tools, classifier=classifier)
             yield
 
@@ -206,6 +212,13 @@ def create_app(
             first = next((text_of(m) for m in messages if m.type == "human"), "New chat")
             latest[thread_id] = {"thread_id": thread_id, "title": first[:60], "updated_at": ts}
         return sorted(latest.values(), key=lambda t: t["updated_at"], reverse=True)
+
+    @app.get("/api/agents")
+    async def get_agents():
+        """The team and their tools, for the sidebar's Team panel (X3): `agents.capabilities.team`
+        built from the same `WORKERS` registry and tool registry the graph itself runs on, so this can
+        never show a worker or a tool the app doesn't really have. See docs/contracts.md § 9."""
+        return team(WORKERS, app.state.tools)
 
     @app.get("/api/threads/{thread_id}")
     async def get_thread(thread_id: str):
