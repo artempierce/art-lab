@@ -119,7 +119,8 @@ In order, the gateway:
 
 **T2 adds**, inside `call`: a per-tool `timeout_s` (register keyword, default 10) using `asyncio.wait_for`,
 **one retry** on any exception or timeout, and then a failed `ToolResult(ok=False, data=None,
-text="[tool <name> failed: <error>]", error=..., attempts=2)` instead of raising. It also adds the
+text="[tool <name> failed]\n<the error, wrapped if the tool is untrusted>", error=..., attempts=2)` instead
+of raising. (An exception message can echo outside text, so it crosses the same boundary as a result.) It also adds the
 **arrival scan**: `guards.input.find_injection(piece.text, skip=rag.ingest.DOCUMENT_SKIP_RULES)` on every
 untrusted piece, which sets `flagged=True`. The text is still wrapped and still returned; the trace
 reports it.
