@@ -11,6 +11,12 @@
 /** One chat in the sidebar (GET /api/threads). `updated_at` is an ISO-8601 timestamp. */
 export type Thread = { thread_id: string; title: string; updated_at: string }
 
+/** One tool an agent may use (GET /api/agents). `tier` is "read-only" or "changes data". */
+export type AgentTool = { name: string; tier: string; description: string }
+
+/** One member of the team (GET /api/agents): Arty (no tools) or a worker he can route to. */
+export type Agent = { name: string; description: string; tools: AgentTool[] }
+
 /**
  * One knowledge-base passage an answer was based on. `n` is its citation number ([1], [2], …) in the
  * answer; `score` is how relevant search judged it (0–1); `text` is the chunk itself.
@@ -54,6 +60,9 @@ export const listThreads = () => getJson<Thread[]>('/api/threads')
 /** One chat's full message history, used when you click a chat in the sidebar. */
 export const getThread = (threadId: string) =>
   getJson<{ thread_id: string; messages: Message[] }>(`/api/threads/${threadId}`)
+
+/** The whole team and their tools, for the sidebar's Team panel (X3). */
+export const getAgents = () => getJson<Agent[]>('/api/agents')
 
 /**
  * Send one message and call `onEvent` for every event the server streams back.

@@ -14,7 +14,7 @@ from typing import Awaitable, Callable
 
 from langchain_core.language_models import BaseChatModel
 
-from artlab.agents import rag_agent, respond
+from artlab.agents import content_ideator, english_coach, rag_agent, respond, youtube_researcher
 from artlab.agents.state import ChatState
 from artlab.tools.registry import ToolRegistry
 
@@ -56,5 +56,28 @@ WORKERS: tuple[WorkerSpec, ...] = (
             "project documents - anything that needs the studio's knowledge base."
         ),
         make_node=rag_agent.make_node,
+    ),
+    # Phase 5 (T10) workers. Each description is the one line evals/routing_golden.yaml uses to explain
+    # that route, so the supervisor's prompt and the golden set agree on what each worker is for.
+    WorkerSpec(
+        name="youtube_researcher",
+        description=(
+            "trends in a niche and what viewers say in comments - researching a YouTube niche before "
+            "making a video, or diagnosing a video's performance."
+        ),
+        make_node=youtube_researcher.make_node,
+    ),
+    WorkerSpec(
+        name="content_ideator",
+        description="video ideas, hooks, outlines - brainstorming what video to make next.",
+        make_node=content_ideator.make_node,
+    ),
+    WorkerSpec(
+        name="english_coach",
+        description=(
+            "fix grammar, polish or rephrase a given piece of text - a caption, script line or reply "
+            "before it goes out."
+        ),
+        make_node=english_coach.make_node,
     ),
 )

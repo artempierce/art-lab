@@ -30,8 +30,8 @@ searching the knowledge base, blocked, or happy (with a wink).
 | `CLAUDE.md` | Rules for AI coding sessions on this repo (documentation standard, cost rule, phase workflow) |
 | `backend/artlab/api.py` | FastAPI server: streams each chat turn to the browser, lists and loads chats |
 | `backend/artlab/graph.py` | Graph assembly: wires together nodes from `backend/artlab/agents/` |
-| `backend/artlab/agents/` | Each node in its own file: `state.py`, `common.py`, `guard.py`, `supervisor.py`, `rag_agent.py`, `respond.py`, `workers.py` (worker registry) |
-| `backend/artlab/guards/` | Guard layer 1 (`input.py`: size, injection rules, per-chat budget; the injection rules also scan documents) and layer 2 (`classifier.py`: a local ONNX prompt-injection classifier — "reduce privileges", not block) |
+| `backend/artlab/agents/` | Each node in its own file: `state.py`, `common.py`, `guard.py`, `supervisor.py`, `rag_agent.py`, `respond.py`, `tool_loop.py` (model-driven tool loop), `capabilities.py` (team registry), `workers.py` (worker registry); Phase 5 workers: `youtube_researcher.py`, `content_ideator.py`, `english_coach.py` |
+| `backend/artlab/guards/` | Guard layer 1 (`input.py`: size, injection rules (including "disable-safety" regex block), per-chat budget; the injection rules also scan documents) and layer 2 (`classifier.py`: a local ONNX prompt-injection classifier — "reduce privileges", not block) |
 | `backend/artlab/model.py` | Real Claude (`claude-haiku-4-5`) or a free fake model; prices and cost formula |
 | `backend/artlab/rag/` | Knowledge base: `ingest.py` (files + web pages → chunks), `web.py` (safe fetch), `embeddings.py` (local, free), `knowledge.py` (Chroma + search) |
 | `backend/artlab/tools/` | Registry (who may call what), tool gateway with per-tool timeout and retry, untrusted wrapper, stub tools, catalog |
@@ -42,6 +42,7 @@ searching the knowledge base, blocked, or happy (with a wink).
 | `backend/tests/` | 115 tests on the fake model and local embeddings — no API calls, $0 |
 | `frontend/src/` | React app: chat list, chat (with Sources), live trace panel |
 | `frontend/src/components/Arty.tsx` | Arty, drawn as an SVG with five moods (idle, thinking, searching, happy, blocked) |
+| `frontend/src/components/TeamList.tsx` | Phase 5 sidebar section listing available workers (team agents) |
 | `.env.example` | Settings template: API keys, LangSmith, fake-model switch |
 
 ---
@@ -55,12 +56,13 @@ What happens when you ask *"Who needs to approve a $900 equipment purchase?"*:
 3. **`api.py → chat()`** makes a **trace ID** (this run) and uses the **thread ID** (this chat), then runs the graph.
 4. The **checkpointer** loads the chat's earlier messages from SQLite, and your message is appended.
 5. **`agents/guard.py`** runs **`check_input()`**: size → injection rules → budget. Blocked? A refusal, the run ends, no model is called. Passed? The local injection **classifier** (`guards/classifier.py`, if it's been downloaded) scores the message; at or above threshold, the chat is marked **tainted** — the message still gets answered, but data-changing tools are refused in this chat from then on.
-6. **`agents/supervisor.py`** — **Arty**, the *main agent* — asks the model for a **`RouteDecision`**: a worker (e.g. `rag_agent`) or direct `respond`, with a reason and the question rewritten to stand alone. The route comes from the **worker registry** in `agents/workers.py`. Step counting starts (max 5 steps).
-7. **`agents/rag_agent.py`** calls **`search_knowledge`** through the **tool gateway** in `tools/registry.py` (only rag_agent may). Search embeds the question locally, asks Chroma for the closest chunks, drops weak matches and flagged chunks, and returns the top 4 — each **wrapped as untrusted** by the gateway. If the first search finds nothing, rag_agent rephrases and searches again (max 2 searches).
-8. rag_agent asks the model to answer **only from those sources**, citing `[1] [2]`; nothing relevant → "I couldn't find that in the knowledge base", with no model call. The sources are attached to the reply.
-9. Back at the **supervisor**: someone answered and step count increments, or the agent hands back an artifact for the next worker. Handoffs and step limits are managed here. When done, the supervisor finishes.
-10. **`api.py`** streams it all as it happens: `start` → `trace` / `token` … → `done` (tokens, cost, time, sources).
-11. **`App`** grows the reply as tokens arrive, adds trace lines to **`TracePanel`**, and shows **Sources** under the answer.
+6. **`agents/supervisor.py`** — **Arty**, the *main agent* — asks the model for a **`RouteDecision`**: a worker (e.g. `rag_agent`, `youtube_researcher`, `content_ideator`, `english_coach`) or direct `respond`, with a reason and the question rewritten to stand alone. The route comes from the **worker registry** in `agents/workers.py`. Step counting starts (max 5 steps).
+7. The chosen **worker** calls **`agents/tool_loop.py`** if it needs tools. The tool loop lets the model pick from its allowed tools (max 3 requests per turn, including refused requests), runs each through the **tool gateway** in `tools/registry.py` (which wraps results as untrusted), and finishes with a forced text answer.
+8. Example: **`agents/rag_agent.py`** calls the tool loop to **`search_knowledge`** (only rag_agent may). Search embeds the question locally, asks Chroma for the closest chunks, drops weak matches and flagged chunks, and returns the top 4 — each **wrapped as untrusted** by the gateway. If the first search finds nothing, rag_agent can rephrase and search again (max 2 searches).
+9. The worker answers from the tool results; nothing relevant → "I couldn't find that in the knowledge base", with no model call. The sources are attached to the reply.
+10. Back at the **supervisor**: someone answered and step count increments, or the agent hands back an artifact for the next worker. Handoffs and step limits are managed here. When done, the supervisor finishes.
+11. **`api.py`** streams it all as it happens: `start` → `trace` / `token` … → `done` (tokens, cost, time, sources).
+12. **`App`** grows the reply as tokens arrive, adds trace lines to **`TracePanel`**, and shows **Sources** under the answer.
 
 Getting documents *into* the knowledge base is separate — see **Knowledge base** below.
 
@@ -116,7 +118,7 @@ Open http://localhost:5173. Chats are stored in `data/artlab.db` — delete it t
 ## Test
 
 ```bash
-cd backend && uv run pytest       # 124 tests: fake model + local embeddings, no API calls, no cost
+cd backend && uv run pytest       # 171 tests: fake model + local embeddings, no API calls, no cost
                                    # (one test class runs the real classifier and is skipped until it's downloaded)
 cd backend && uv run pytest tests/test_retrieval_eval.py -s   # retrieval report: rank of the right file per golden question
 cd frontend && npm run build      # type-check + production build
@@ -154,7 +156,8 @@ Each phase ends **working, visible in the trace panel, tested, and documented**.
 | 2 | **Knowledge base + main agent**: ingest files and web pages (injection-scanned), local embeddings + Chroma, supervisor routes to `rag_agent`, cited answers, retrieval eval (hit@4 100%) | ✅ done (real-Claude check pending) |
 | 3 | Supervisor v2: worker registry, more routes, step limit circuit breaker | ✅ done |
 | 4 | Tool gateway: per-tool timeout, retries, failure handling, stub tools, taint tracking | ✅ done |
-| 5–13 | Worker agents, approval, memory, skills, handoffs, caps, evals, dashboards | planned |
+| 5 | **Worker agents phase 1**: youtube_researcher (query_youtube_trends, fetch_comments), content_ideator (3 ideas with hooks), english_coach (polish); tool loop (model-driven, max 3 per turn); capabilities registry (GET /api/agents, TeamList sidebar); trace panel keeps runs while switching chats | ✅ done |
+| 6–13 | Approval, memory, skills, handoffs, caps, evals, dashboards | planned |
 
 ---
 
@@ -210,7 +213,7 @@ art-lab/
 │   │   ├── rag/                  # ingest, web fetch, embeddings, knowledge base + search
 │   │   └── tools/                # registry, gateway (timeout/retry), untrusted wrapper, stubs, catalog
 │   ├── skills/                   # SKILL.md files for phases 5+: retention-analysis, hook-formulas, style-guide
-│   └── tests/                    # 115 tests: api, guard, agents, tools, RAG, skills, evals
+│   └── tests/                    # 171 tests: api, guard, agents, tools, RAG, skills, evals, Phase 5 workers
 ├── evals/                        # Golden question sets and eval runners: routing, RAG, workers
 ├── frontend/                     # Vite · React · TypeScript · Tailwind
 │   └── src/

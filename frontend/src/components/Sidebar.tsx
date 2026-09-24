@@ -1,12 +1,15 @@
 /**
- * Sidebar.tsx — the left pane: the Art Lab logo with Arty, "New chat", the list of saved chats, and
- * placeholders for the Memory and Runs pages that come in later phases.
+ * Sidebar.tsx — the left pane: the Art Lab logo with Arty, "New chat", the list of saved chats, a
+ * collapsible Team section (X3), and placeholders for the Memory and Runs pages that come in later
+ * phases.
  *
- * It only displays what App gives it and reports clicks back through onOpen / onNew.
+ * It only displays what App gives it and reports clicks back through onOpen / onNew. Team is the one
+ * exception: it fetches its own data (see TeamList.tsx) since nothing else on the page needs it.
  * Style: the sage page with white cards (see .card, .btn-black in index.css); the open chat is orange.
  */
 import type { Thread } from '../api'
 import { Arty } from './Arty'
+import { TeamList } from './TeamList'
 
 type Props = {
   threads: Thread[] // chats to list, newest first
@@ -64,6 +67,8 @@ export function Sidebar({ threads, error, activeId, onOpen, onNew }: Props) {
           )
         })}
       </nav>
+
+      <TeamList />
 
       {/* Roadmap placeholders: Memory page (Phase 12) and Runs page (Phase 13). */}
       <div className="border-t-2 border-ink pt-4">

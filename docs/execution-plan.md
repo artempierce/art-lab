@@ -4,7 +4,7 @@
 model does each one — so development costs fewer tokens without lowering quality.
 **What to build and in what order** stays in the design book (`docs/design.html`); this plan follows it.
 
-Status: Wave 0 (W0.4, W0.5) and Wave 1 (T1, T2, T4, T5) done on 2026-09-23 · T3 waiting on W0.2 decision · Phase 5 next (Wave 2 workers).
+Status: Waves 0–1, T3 and Phase 5 (Wave 2: F1, T7–T10, X1–X3) done on 2026-09-23 · next: Phase 6 (approvals).
 
 ---
 
@@ -95,10 +95,10 @@ change (plus its own tests), which is what makes parallel work safe.
 
 | ID | Task | Phase | Model | Owns | Done when |
 |---|---|---|---|---|---|
-| T7 | `youtube_researcher` (copies the rag_agent pattern; uses T2 stubs) | 5 | Sonnet | `agents/youtube_researcher.py` + tests | Answers from stub data (S1) |
-| T8 | `content_ideator` | 5 | Sonnet | `agents/content_ideator.py` + tests | 3 ideas with hooks from a research artifact |
-| T9 | `english_coach` (no tools) | 5 | Sonnet | `agents/english_coach.py` + tests | Grammar request routed and answered (S4) |
-| T10 | Register T7–T9 as routes; trace colours in the UI | 5 | Sonnet, after T7–T9 | worker registry line, `TracePanel.tsx` | Supervisor routes to all four workers |
+| T7 | `youtube_researcher` (copies the rag_agent pattern; uses T2 stubs) | 5 | Sonnet | `agents/youtube_researcher.py` + tests | Answers from stub data (S1) ✅ |
+| T8 | `content_ideator` | 5 | Sonnet | `agents/content_ideator.py` + tests | 3 ideas with hooks from a research artifact ✅ |
+| T9 | `english_coach` (no tools) | 5 | Sonnet | `agents/english_coach.py` + tests | Grammar request routed and answered (S4) ✅ |
+| T10 | Register T7–T9 as routes; trace colours in the UI | 5 | Sonnet, after T7–T9 | worker registry line, `TracePanel.tsx` | Supervisor routes to all four workers ✅ |
 | T11 | **Long-term memory**: facts per user in a Chroma "memory" collection (reuses RAG code); extract after a run, recall before routing; summarise long chats; recalled facts are untrusted (they may come from tainted runs) and pass the same boundary | 7 | Sonnet (Opus review: user filtering) | `memory/*`, context node, tests | S8: niche recalled in a new chat |
 | T12 | **Skills**: skills index in worker prompts + `load_skill` tool (uses T5 files) | 8 | Sonnet | `skills` loader, catalog entry, tests | S9: skill loaded only when needed |
 

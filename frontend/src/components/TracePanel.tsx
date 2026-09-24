@@ -17,12 +17,17 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Run } from '../App'
 
-// Stage name → text colour: guard amber, Arty navy, rag_agent red, tools green (dark enough for white cards).
+// Stage name → text colour: guard amber, Arty navy, rag_agent red, tools green (dark enough for white
+// cards). The Phase 5 workers get their own darker tokens (index.css, all ≥ 6:1 on white, the WCAG
+// AA text minimum is 4.5:1): youtube_researcher blue, content_ideator purple, english_coach raspberry.
 const STAGE_COLOR: Record<string, string> = {
   guard: 'text-t-guard',
   arty: 'text-t-agent',
   rag_agent: 'text-t-rag',
   tool: 'text-t-tool',
+  youtube_researcher: 'text-t-research',
+  content_ideator: 'text-t-ideas',
+  english_coach: 'text-t-coach',
 }
 
 // Status → icon at the start of the line. Unknown statuses get a plain dot.
@@ -79,8 +84,8 @@ function RunBlock({ run, running }: { run: Run; running: boolean }) {
           const failed = line.status !== 'ok'
           const color = failed ? 'text-t-human' : (STAGE_COLOR[line.stage] ?? 'text-ink')
           return (
-            // Four columns: icon | stage | detail (wraps if long) | time
-            <li key={i} className="grid grid-cols-[1.4em_6.5em_minmax(0,1fr)_auto] gap-x-2">
+            // Four columns: icon | stage (11em fits the longest name, "youtube_researcher", in mono) | detail (wraps) | time
+            <li key={i} className="grid grid-cols-[1.4em_11em_minmax(0,1fr)_auto] gap-x-2">
               <span className={color}>{STATUS_ICON[line.status] ?? '•'}</span>
               <span className={`font-medium ${color}`}>{line.stage}</span>
               <span className="break-words">{line.detail}</span>

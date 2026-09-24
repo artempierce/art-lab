@@ -34,9 +34,13 @@ Contract: docs/contracts.md § 4.
 """
 
 import asyncio
+import inspect
 import json
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
+
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from pydantic import create_model
 
 from artlab.guards.input import find_injection
 from artlab.rag.ingest import DOCUMENT_SKIP_RULES
@@ -182,6 +186,45 @@ class ToolRegistry:
                 raise ToolDenied(f"{name} changes data, and this chat has read untrusted content, so it is refused")
             raise ToolDenied(f"{name} changes data and needs your approval, which arrives in Phase 6")
         return tool
+
+    def tools_for(self, agent: str) -> list[Tool]:
+        """The tools `agent` may call, in the order they were registered (docs/contracts.md § 9).
+
+        Used to build the model's tool definitions (`specs_for`, below) and, later, by
+        `agents/capabilities.py` (X3) to list an agent's tools for the UI's Team panel.
+        """
+        return [tool for tool in self._tools.values() if agent in tool.allowed_agents]
+
+    def specs_for(self, agent: str) -> list[dict]:
+        """`tools_for(agent)` as tool definitions for `model.bind_tools(...)` (docs/contracts.md § 9):
+        one dict per tool, in the JSON-schema shape `langchain_core` expects from every model provider.
+
+        The model is only ever shown a tool's *required* parameters: any parameter with a default
+        (e.g. `search(query, k=4)`'s `k`) is left out of the schema entirely, so the model can't ask
+        for it — our own code always supplies it, keeping control of limits like how many hits come
+        back. Built the same way LangChain builds `with_structured_output`'s schema: one Pydantic field
+        per required parameter (`pydantic.create_model`, using the function's own type hints), handed
+        to `convert_to_openai_tool`. The tool's *name* and *description* then come from the
+        registration, not from `create_model`'s anonymous class.
+
+        Example: `KnowledgeBase.search(self, query: str, k: int = TOP_K)` is registered as
+        "search_knowledge" — the spec that comes back is named "search_knowledge" and its schema has
+        only `query`.
+        """
+        specs = []
+        for tool in self.tools_for(agent):
+            required_fields: dict[str, Any] = {}
+            for param_name, param in inspect.signature(tool.fn).parameters.items():
+                if param_name == "self" or param.default is not inspect.Parameter.empty:
+                    continue  # defaulted parameters are hidden from the model (see the docstring above)
+                annotation = param.annotation if param.annotation is not inspect.Parameter.empty else str
+                required_fields[param_name] = (annotation, ...)
+            schema = create_model(tool.name, **required_fields)
+            spec = convert_to_openai_tool(schema)
+            spec["function"]["name"] = tool.name
+            spec["function"]["description"] = tool.description
+            specs.append(spec)
+        return specs
 
     async def call(self, agent: str, name: str, *, tainted: bool = False, **args: Any) -> ToolResult:
         """Run tool `name` on behalf of `agent` (steps 1–5 in the file header).
