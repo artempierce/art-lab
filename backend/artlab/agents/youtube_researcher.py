@@ -20,6 +20,7 @@ from langchain_core.language_models import BaseChatModel
 
 from artlab.agents.state import ChatState
 from artlab.agents.tool_loop import run_tool_loop
+from artlab.guards.caps import limits_from
 from artlab.tools.registry import ToolRegistry
 
 # The node name = the supervisor's route value (docs/contracts.md § 2/§ 3), and the trace stage for
@@ -66,7 +67,9 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
 
         Steps:
           1. Hand the task to `run_tool_loop`, passing in this chat's current `tainted` flag so a tool
-             call made after earlier untrusted content (this turn or an earlier one) is still refused.
+             call made after earlier untrusted content (this turn or an earlier one) is still refused,
+             and this turn's remaining time/dollar budget (`limits_from`, docs/contracts.md § 14,
+             ticket G2), so a tool loop that keeps calling tools can't run past the turn's caps.
           2. Report back the loop's answer, cost and who answered — always. If the loop used any
              untrusted tool result (both stubs are untrusted by default), mark the chat tainted; a
              clean run (no tools called, or a failure with no data) doesn't add `tainted` at all, so
@@ -75,6 +78,7 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
         r = await run_tool_loop(
             model, tools, NAME, PROMPT, state["task"],
             tainted_in=state.get("tainted", False), taint_sources_in=state.get("taint_sources", []),
+            limits=limits_from(state),
         )
         update = {"messages": [r.reply], "spent_usd": r.spent_usd, "answered_by": NAME}
         if r.pending:  # no mutating tool is allowed here today, but the loop's contract is the same for every worker

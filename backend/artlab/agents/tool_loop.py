@@ -29,6 +29,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langgraph.config import get_stream_writer
 
 from artlab.agents.common import ms_since, tokens_used
+from artlab.guards.caps import Limits, STOP_NOTICE
 from artlab.model import cost_usd, model_name
 from artlab.skills.loader import skills_index
 from artlab.tools.registry import ApprovalRequired, ToolDenied, ToolRegistry
@@ -48,6 +49,12 @@ MAX_TOOL_CALLS = 3
 # what keeps this one task the whole way down; see tools/registry.py's `_run`).
 caller_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar("caller_ctx", default=None)
 tainted_in_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar("tainted_in_ctx", default=False)
+
+# Phase 10 (docs/contracts.md § 14, ticket G2): the same contextvar trick, one more variable, so an
+# `ask_<callee>` tool (tools/agents.py) can hand its nested loop the CALLER's remaining turn budget —
+# not the caller's original budget, but what's left of it right now, after everything the caller's own
+# loop has already spent. Set for the span of one `tools.call(...)` await, same as the other two.
+limits_ctx: contextvars.ContextVar["Limits | None"] = contextvars.ContextVar("limits_ctx", default=None)
 
 # Appended to every worker's own system prompt. Tool results are wrapped in <untrusted_retrieval> by
 # the gateway (tools/registry.py) before the model ever sees them — this tells the model what that
@@ -118,6 +125,7 @@ async def run_tool_loop(
     history: list[BaseMessage] | None = None,
     depth: int = 0,
     caller: str | None = None,
+    limits: Limits | None = None,
 ) -> LoopResult:
     """Run one worker turn: let the model call `agent`'s allowed tools, up to MAX_TOOL_CALLS times,
     then return its final text answer.
@@ -148,13 +156,26 @@ async def run_tool_loop(
                           line this loop writes gets `"↳ for <caller> · "` in front of its detail), so
                           the trace panel can tell a nested call apart from that same worker answering
                           its own turn.
+        limits:           Phase 10 (docs/contracts.md § 14, ticket G2): this turn's remaining time and
+                          dollar budget (`guards/caps.limits_from(state)`), or `None` to run with no
+                          cap at all (every test in this file that doesn't care about caps). Checked
+                          before each model call (step 3, below) — never mutated: this loop tracks its
+                          OWN running spend in the local `spent_usd`, and compares that against
+                          `limits.spend_left`, which stays the fixed snapshot it was built from.
 
     Steps (docs/contracts.md § 9):
         1. Look up `agent`'s tools and bind them to the model — or use the model unbound if it has
            none, so a tool-less worker is still just one model call through this same loop.
         2. Build the message list: the system prompt (+ TOOL_RULES, + the skills index if `agent` may
            use load_skill — Phase 8, docs/contracts.md § 12), then `history` if given, then the task.
-        3. Call the model. No tool calls in the reply → that's the final answer, done. Otherwise, for
+        3. Before calling the model: if `limits` is set and this turn is now past its deadline, or this
+           loop's own running `spent_usd` has reached `limits.spend_left`, stop right here (Phase 10,
+           docs/contracts.md § 14) — trace status "stopped", naming which cap fired, and the reply is
+           `STOP_NOTICE`. No new model call is made, but every `AIMessage` tool call already in
+           `messages` already got its `ToolMessage` reply in a previous pass through this step (real
+           Claude needs that one-to-one pairing whether or not the loop goes on to call it again), so
+           the message list this loop built is still valid even though it stops mid-way.
+        4. Call the model. No tool calls in the reply → that's the final answer, done. Otherwise, for
            each tool the model asked for, in order: stop early with a "budget used up" `ToolMessage`
            once MAX_TOOL_CALLS have already run; otherwise check it through the gateway, which may ask
            for approval (`ApprovalRequired`, Phase 6 — stop the whole loop, see below), refuse it
@@ -162,13 +183,22 @@ async def run_tool_loop(
            but approval becomes exactly one `ToolMessage`, replying to that call's own id — real Claude
            requires one-to-one replies, and the fake model's tests check the same thing. Then go back
            to step 3.
-        4. Once the model has asked for MAX_TOOL_CALLS tools (run, refused or malformed: all count),
-           every later call in step 3 uses the *unbound* model — no tools to ask for, so it must answer
+        5. Once the model has asked for MAX_TOOL_CALLS tools (run, refused or malformed: all count),
+           every later call in step 4 uses the *unbound* model — no tools to ask for, so it must answer
            in text. That's what guarantees this loop ends: at most MAX_TOOL_CALLS + 1 model calls.
 
     Taint (docs/contracts.md § 1): each tool call passes `tainted_in or tainted_so_far`, so a
     data-changing tool requested *after* an untrusted result — even earlier in this same turn — is
     refused, not just later turns.
+
+    Turn caps, nested calls (docs/contracts.md § 14, ticket G2): when a tool call is `ask_<callee>`
+    (tools/agents.py), the nested `run_tool_loop` it starts must run against the CALLER's remaining
+    budget, not a fresh one — otherwise a chain of nested calls could spend far more than one turn's
+    cap allows. `limits_ctx` (above) carries that through: right before awaiting the tool call, set to
+    `Limits(deadline=limits.deadline, spend_left=limits.spend_left - spent_usd)` — the same deadline
+    (a point in time doesn't change), but the spend left *right now*, after everything this loop has
+    already spent. `ask_<callee>`'s own coroutine reads it back with `.get()`, the same pattern
+    `caller_ctx`/`tainted_in_ctx` already use (see the module docstring for why a contextvar).
 
     Approval (docs/contracts.md § 10): a mutating tool's `ApprovalRequired` stops the loop immediately
     — no more model calls, so the arguments recorded in `LoopResult.pending` are exactly what the model
@@ -224,10 +254,23 @@ async def run_tool_loop(
     taint_sources_so_far: list[str] = list(dict.fromkeys(taint_sources_in))
 
     while True:
-        # 4. Budget spent → fall back to the model with no tools bound, so it can't ask for another.
+        # 3. Turn cap check (Phase 10, docs/contracts.md § 14), before spending anything on another
+        # model call: over the deadline, or this loop's own spend has used up what's left of the
+        # turn's dollar budget → stop here, no model call. `spent_usd >= limits.spend_left` (not `>`)
+        # so a cap of exactly one call's worth of spend still stops the *next* call, not this one's own.
+        if limits is not None:
+            kind = "time" if time.time() >= limits.deadline else ("cost" if spent_usd >= limits.spend_left else None)
+            if kind:
+                _write({"stage": agent, "status": "stopped", "detail": f"stopped · turn {kind} limit reached", "ms": 0})
+                return LoopResult(
+                    reply=AIMessage(STOP_NOTICE.format(kind=kind)), spent_usd=spent_usd,
+                    tainted=tainted_so_far, tool_calls=calls_run, taint_sources=taint_sources_so_far,
+                )
+
+        # 5. Budget spent → fall back to the model with no tools bound, so it can't ask for another.
         current_model = bound_model if requested < MAX_TOOL_CALLS else model
 
-        # 3. One model call. Every call — whether it asks for tools or answers — gets its own trace
+        # 4. One model call. Every call — whether it asks for tools or answers — gets its own trace
         #    line under this worker's own stage name, the same way rag_agent reports its calls.
         start = time.perf_counter()
         reply: AIMessage = await current_model.ainvoke(messages)
@@ -324,13 +367,20 @@ async def run_tool_loop(
             # this one await, so if `name` is `ask_<callee>`, its coroutine (tools/agents.py) can read
             # back who's asking and whether this chat already read untrusted content — see the module
             # docstring above for why a contextvar, not a new tool argument, carries this through.
+            # `limits_ctx` (Phase 10, docs/contracts.md § 14, ticket G2) carries this loop's REMAINING
+            # budget the same way: same deadline, but `spend_left` reduced by what this loop has spent
+            # so far — a nested `ask_<callee>` call must live inside what's left of the turn, not get a
+            # fresh $0.05 of its own.
             caller_token = caller_ctx.set(agent)
             tainted_token = tainted_in_ctx.set(tainted_now)
+            remaining = Limits(deadline=limits.deadline, spend_left=limits.spend_left - spent_usd) if limits else None
+            limits_token = limits_ctx.set(remaining)
             try:
                 result = await tools.call(agent, name, tainted=tainted_now, **args)
             finally:
                 caller_ctx.reset(caller_token)
                 tainted_in_ctx.reset(tainted_token)
+                limits_ctx.reset(limits_token)
             calls_run += 1
             tainted_so_far = tainted_so_far or result.untrusted
             # Phase 9b's shared budget (docs/contracts.md § 13): an `ask_<callee>` tool's result is an

@@ -180,6 +180,9 @@ function Bubble({
         <div className="prose max-w-none prose-p:my-2">
           <Markdown>{message.content}</Markdown>
         </div>
+        {/* Set by App's `replace` handler (Phase 10, contracts.md § 14): the output guard swapped
+            this reply's text after it had already streamed in. */}
+        {message.redacted && <p className="mt-2 text-xs text-muted">Redacted by the output guard.</p>}
         {message.sources && message.sources.length > 0 && <Sources sources={message.sources} />}
         {message.approval && (
           <ApprovalCard

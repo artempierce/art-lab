@@ -31,7 +31,7 @@ searching the knowledge base, blocked, or happy (with a wink).
 | `backend/artlab/api.py` | FastAPI server: streams each chat turn to the browser, lists and loads chats |
 | `backend/artlab/graph.py` | Graph assembly: wires together nodes from `backend/artlab/agents/` |
 | `backend/artlab/agents/` | Each node in its own file: `state.py`, `common.py`, `guard.py`, `summarize.py` (fold to 1 summary after 30+ messages), `recall.py` (load ≤12 facts), `supervisor.py`, `rag_agent.py`, `respond.py`, `tool_loop.py` (model-driven tool loop), `capabilities.py` (team registry), `workers.py` (worker registry), `remember.py` (extract ≤3 facts); Phase 5 workers: `youtube_researcher.py`, `content_ideator.py`, `english_coach.py` |
-| `backend/artlab/guards/` | Guard layer 1 (`input.py`: size, injection rules (including "disable-safety" regex block), per-chat budget; the injection rules also scan documents) and layer 2 (`classifier.py`: a local ONNX prompt-injection classifier — "reduce privileges", not block) |
+| `backend/artlab/guards/` | Input guard: layer 1 (`input.py`: size, injection rules including "disable-safety" regex block, per-chat budget; rules also scan documents) and layer 2 (`classifier.py`: ONNX prompt-injection classifier — "reduce privileges", not block). Output guard and caps: `output.py` (checks answers: leaked prompts → withheld, internal tags → stripped, content_ideator without 3 ideas → warning) and `caps.py` (90 s or $0.05 per turn). |
 | `backend/artlab/model.py` | Real Claude (`claude-haiku-4-5`) or a free fake model; prices and cost formula |
 | `backend/artlab/rag/` | Knowledge base: `ingest.py` (files + web pages → chunks), `web.py` (safe fetch), `embeddings.py` (local, free), `knowledge.py` (Chroma + search) |
 | `backend/artlab/tools/` | Registry (who may call what), tool gateway with per-tool timeout and retry, untrusted wrapper, stub tools, catalog; `agents.py` (agent-call tools like `ask_youtube_researcher`); `save_ideas` (mutating tool, needs approval); `ideas.py` data writer; `load_skill` (reads skill text on demand) |
@@ -41,7 +41,7 @@ searching the knowledge base, blocked, or happy (with a wink).
 | `backend/skills/` | SKILL.md files: retention-analysis, hook-formulas, style-guide. Read at startup by `backend/artlab/skills/loader.py`; agents see only names and descriptions, and load the full text on demand with `load_skill` |
 | `knowledge/` | Sample documents to search: 6 fictional studio policies + a poisoned test note |
 | `evals/` | Golden question sets: routing, rag, youtube_researcher, content_ideator, english_coach; eval runners |
-| `backend/tests/` | 216 tests on the fake model and local embeddings — no API calls, $0 |
+| `backend/tests/` | 228 tests on the fake model and local embeddings — no API calls, $0 |
 | `frontend/src/` | React app: chat list, chat (with Sources), live trace panel |
 | `frontend/src/components/Arty.tsx` | Arty, drawn as an SVG with five moods (idle, thinking, searching, happy, blocked) |
 | `frontend/src/components/ApprovalCard.tsx` | Phase 6: Approve / Reject card for mutating tools; shows taint warning and what the tool will do |
@@ -61,15 +61,16 @@ What happens when you ask *"Who needs to approve a $900 equipment purchase?"*:
 5. **`agents/guard.py`** runs **`check_input()`**: size → injection rules → budget. Blocked? A refusal, the run ends, no model is called. Passed? The local injection **classifier** (`guards/classifier.py`, if it's been downloaded) scores the message; at or above threshold, the chat is marked **tainted** — the message still gets answered, but data-changing tools are refused in this chat from then on.
 5b. **`agents/summarize.py`**: if the chat has 30+ messages, fold all but the last 10 into one summary. Trimmed `messages` go to the supervisor.
 5c. **`agents/recall.py`**: load up to 12 facts from long-term memory (`memory/store.py`, filtered by owner), wrapped as untrusted and read-only.
-6. **`agents/supervisor.py`** — **Arty**, the *main agent* — asks the model for a **`RouteDecision`**: a plan of up to 3 steps (e.g. youtube_researcher → content_ideator → english_coach), with each step's answer passed to the next as an untrusted artifact. Arty can also call another agent nested (Phase 9b, via `ask_youtube_researcher` in `tools/agents.py`), and the cost is shared. The route comes from the **worker registry** in `agents/workers.py`. Step counting starts (max 5 steps).
+6. **`agents/supervisor.py`** — **Arty**, the *main agent* — asks the model for a **`RouteDecision`**: a plan of up to 3 steps (e.g. youtube_researcher → content_ideator → english_coach), with each step's answer passed to the next as an untrusted artifact. Arty can also call another agent nested (Phase 9b, via `ask_youtube_researcher` in `tools/agents.py`), and the cost is shared. Before dispatch, turn caps (90 s or $0.05) are checked; if a limit is hit, the run stops with the best answer so far. The route comes from the **worker registry** in `agents/workers.py`. Step counting starts (max 5 steps).
 7. The chosen **worker** calls **`agents/tool_loop.py`** if it needs tools. The tool loop lets the model pick from its allowed tools (max 3 requests per turn, including refused requests), runs each through the **tool gateway** in `tools/registry.py` (which wraps results as untrusted), and finishes with a forced text answer. Agents see a **skills index** (names + descriptions) in their prompt and can load a skill with `load_skill`.
 7b. **For data-changing tools** (e.g. `save_ideas`): the gateway refuses to run it directly (`ApprovalRequired`); the worker records the request as `pending_approval`, and the **`approval` node** pauses the run with LangGraph's `interrupt()`. The browser gets an `approval` event and shows a card (with a warning if the chat is tainted); your click calls `POST /api/chat/resume`, and only then does the tool run, with exactly the arguments you saw.
 8. Example: **`agents/rag_agent.py`** calls the tool loop to **`search_knowledge`** (only rag_agent may). Search embeds the question locally, asks Chroma for the closest chunks, drops weak matches and flagged chunks, and returns the top 4 — each **wrapped as untrusted** by the gateway. If the first search finds nothing, rag_agent can rephrase and search again (max 2 searches).
 9. The worker answers from the tool results; nothing relevant → "I couldn't find that in the knowledge base", with no model call. The sources are attached to the reply.
 10. Back at the **supervisor**: someone answered and step count increments, or the agent hands back an artifact for the next worker. Handoffs and step limits are managed here. When done, the supervisor finishes.
-11. **`api.py`** streams it all as it happens: `start` → `trace` / `token` … → `done` (tokens, cost, time, sources).
-12. **`App`** grows the reply as tokens arrive, adds trace lines to **`TracePanel`**, and shows **Sources** under the answer.
-13. **`agents/remember.py`**: after the supervisor finishes, extract ≤3 durable facts from *only your message* (not tool output or documents), upsert to long-term memory by key. Flagged messages are skipped.
+11. **`agents/remember.py`**: after the supervisor finishes, extract ≤3 durable facts from *only your message* (not tool output or documents), upsert to long-term memory by key. Flagged messages are skipped.
+12. **The `output_guard` node** (`guards/output.py`): checks the answer for leaked system-prompt sentences (withheld if found), internal tags (stripped), and content_ideator without 3 ideas (warning added). If changes are made, streams a `replace` SSE event so the chat bubble updates live with a "Redacted by the output guard" note.
+13. **`api.py`** streams it all as it happens: `start` → `trace` / `token` … → `done` (tokens, cost, time, sources).
+14. **`App`** grows the reply as tokens arrive, adds trace lines to **`TracePanel`**, and shows **Sources** under the answer.
 
 Getting documents *into* the knowledge base is separate — see **Knowledge base** below.
 
@@ -125,7 +126,7 @@ Open http://localhost:5173. Chats are stored in `data/artlab.db` — delete it t
 ## Test
 
 ```bash
-cd backend && uv run pytest       # 216 tests: fake model + local embeddings, no API calls, no cost
+cd backend && uv run pytest       # 228 tests: fake model + local embeddings, no API calls, no cost
                                    # (one test class runs the real classifier and is skipped until it's downloaded)
 cd backend && uv run pytest tests/test_retrieval_eval.py -s   # retrieval report: rank of the right file per golden question
 cd frontend && npm run build      # type-check + production build
@@ -169,7 +170,8 @@ Each phase ends **working, visible in the trace panel, tested, and documented**.
 | 8 | **Skills**: load_skill tool, skills index in prompts, inlined patterns removed from ideator/coach | ✅ done |
 | 9 | **Handoffs planned upfront**: supervisor can plan up to 3 steps, each answer passed to the next as untrusted artifact | ✅ done |
 | 9b | **Agent calls agent**: content_ideator can call youtube_researcher nested (depth 1, cost shared) via ask_youtube_researcher | ✅ done |
-| 10–13 | Output guard + caps, evals, dashboards | planned |
+| 10 | **Output guard + caps**: output_guard checks answers (leaked prompts withheld, internal tags stripped, content_ideator without 3 ideas warns); turn caps (90 s or $0.05) stop dispatch with best answer so far | ✅ done |
+| 11–13 | Evals, dashboards, memory page | planned |
 
 ---
 

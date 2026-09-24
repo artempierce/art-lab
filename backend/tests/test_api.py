@@ -91,22 +91,26 @@ def kb_with_policy(tmp_path):
 
 
 def test_general_question_is_answered_directly(client):
-    """guard → recall → Arty decides to answer himself → Arty answers → Arty is done → remember.
-    Streamed, with cost. (All three Arty lines come from two nodes, `supervisor` and `respond`; the
-    trace names both "arty". The two "memory" lines are recall, then remember — Phase 7,
-    docs/contracts.md § 11: "hi" is under 15 characters, so remember skips with no model call.)"""
+    """guard → recall → Arty decides to answer himself → Arty answers → Arty is done → remember →
+    output_guard. Streamed, with cost. (All three Arty lines come from two nodes, `supervisor` and
+    `respond`; the trace names both "arty". The two "memory" lines are recall, then remember — Phase 7,
+    docs/contracts.md § 11: "hi" is under 15 characters, so remember skips with no model call. The
+    final "guard" line is the output guard, Phase 10, docs/contracts.md § 14: a plain "hi" has nothing
+    to redact.)"""
     events = send(client, "hi")
 
     assert [name for name, _ in events][0] == "start" and events[-1][0] == "done"
     assert answer(events) == "Hello from the fake model."
     assert stages(events) == [
         ("guard", "ok"), ("memory", "ok"), ("arty", "ok"), ("arty", "ok"), ("arty", "ok"), ("memory", "ok"),
+        ("guard", "ok"),
     ]
     traces = [d for n, d in events if n == "trace"]
     assert traces[1]["detail"] == "no facts yet"
     assert traces[2]["detail"].startswith("answering myself") and traces[3]["detail"].startswith("answer · ")
     assert traces[4]["detail"] == "done · answered by Arty"
     assert traces[5]["detail"] == "skipped (too short)"
+    assert traces[6]["detail"] == "output ok"
     assert events[-1][1]["cost_usd"] == 0 and events[-1][1]["sources"] == []
 
 
@@ -114,20 +118,22 @@ def test_knowledge_question_goes_to_rag_agent_with_sources(tmp_path, kb_with_pol
     """A question about our policies: supervisor → rag_agent → search → answer citing [1], with sources
     in the `done` event and saved in the chat history. (Phase 7, docs/contracts.md § 11: recall runs
     before the supervisor, remember after it's done — this question doesn't say "my X is Y", so
-    remember finds nothing to save.)"""
+    remember finds nothing to save. The final "guard" line is the output guard, Phase 10,
+    docs/contracts.md § 14: an answer citing a real source has nothing to redact.)"""
     app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=kb_with_policy, memory=empty_memory(tmp_path))
     with TestClient(app) as client:
         events = send(client, "What is our sponsorship disclosure rule?")
 
         assert stages(events) == [
             ("guard", "ok"), ("memory", "ok"), ("arty", "ok"), ("tool", "ok"), ("rag_agent", "ok"),
-            ("arty", "ok"), ("memory", "ok"),
+            ("arty", "ok"), ("memory", "ok"), ("guard", "ok"),
         ]
         traces = [d for n, d in events if n == "trace"]
         assert traces[1]["detail"] == "no facts yet"
         assert traces[2]["detail"].startswith("→ rag_agent") and traces[5]["detail"] == "done · answered by rag_agent"
         assert traces[3]["detail"].startswith("search_knowledge [read-only] · 1 chunks · 1 files")
         assert traces[6]["detail"] == "nothing to remember"
+        assert traces[7]["detail"] == "output ok"
         assert "[1]" in answer(events) and "first 30 seconds" in answer(events)
 
         sources = events[-1][1]["sources"]

@@ -19,7 +19,7 @@ straight away, and the node continues from there. That's why the `approval` node
 run of the same node must never repeat a side effect (like running the tool) that only belongs after
 the resume.
 
-The graph today (Phase 7 — memory):
+The graph today (Phase 10 — output guard and caps):
 
     START ──▶ guard ──blocked──────────────────────────────────────────▶ END   (refusal, no model call)
                 │
@@ -32,8 +32,9 @@ The graph today (Phase 7 — memory):
                                  │  ▲                                  │
                                  │  └──────────── a worker answered ◀──┘   (or asks to hand off to another worker)
                                  ├── a tool needs your click ──▶ approval ──▶ END  (interrupt(); resumes via /api/chat/resume)
-                                 ├── finish ──▶ remember ──▶ END   (saves facts from YOUR message, docs/contracts.md § 11)
-                                 └── step limit reached (5 dispatches) ────▶ END  (with a note in the answer)
+                                 ├── finish ──▶ remember ──▶ output_guard ──▶ END   (saves facts from YOUR message, then
+                                 │                                                  checks the answer, docs/contracts.md §§ 11, 14)
+                                 └── step limit reached (5 dispatches) ──▶ output_guard ──▶ END  (with a note in the answer)
 
 The supervisor is the "main agent", and it has a name: **Arty** (a little retro computer with a face
 and a beret in the web UI, frontend/src/components/Arty.tsx). Arty decides who answers each message,
@@ -62,6 +63,13 @@ loads your saved facts into state before the supervisor decides anything, and `r
 only once a worker has answered and the turn is otherwise done — looks at the message you just typed
 for anything durable worth saving. Neither is a worker: like `approval`, they're never in `WORKERS`,
 so the model can't route to them, only the graph's own wiring sends a turn there.
+
+`output_guard` (Phase 10, docs/contracts.md § 14) is the last stop before END on every path except
+`approval`'s own — both the ordinary "finish" branch (after `remember`) and the step-limit stop paths
+in `agents/supervisor.py` land here. It checks every answer this turn added, redacts a leaked prompt or
+a stray internal tag, and rewrites the saved message so the chat history is also clean, not just the
+live view api.py already retracted with a `replace` event. Like `recall`/`remember`/`approval`, it's
+never a worker, and it needs no model — see `guards/output.py`.
 """
 
 import time
@@ -77,6 +85,7 @@ from artlab.agents import guard, recall, remember, summarize, supervisor
 from artlab.agents.common import ms_since
 from artlab.agents.state import ChatState
 from artlab.agents.workers import WORKERS, WorkerSpec
+from artlab.guards import output
 from artlab.guards.classifier import InjectionClassifier
 from artlab.memory.store import MemoryStore
 from artlab.tools.registry import ToolRegistry
@@ -174,24 +183,31 @@ def build_graph(
 
     # Wire the nodes together. `guard` and `supervisor` have no fixed outgoing edges: their Commands'
     # `goto` decides. `destinations` doesn't change that — it only tells LangGraph (for graph
-    # drawings) which nodes the supervisor *can* jump to: any worker, "approval", "remember", or the
-    # end. Workers always report back to the supervisor. `approval` and `remember` (Phase 6 and 7) are
-    # not workers — neither is ever in `workers`, so neither is a route the model can pick, only
-    # something the supervisor's own code sends a turn to — and both always end the turn themselves
-    # (their edges go straight to END, never back to the supervisor). `recall` sits between the guard
-    # and the supervisor on every turn, so it has one fixed edge, not a `Command`. Compiling with a
-    # checkpointer turns on saving: each run is saved under the `thread_id` api.py passes in (one
-    # thread = one chat), which is also what makes `interrupt()`/resume possible — see the file header.
+    # drawings) which nodes the supervisor *can* jump to: any worker, "approval", "remember", or
+    # "output_guard" (the step-limit stop paths, docs/contracts.md § 14) — `END` stays too, for the
+    # "unknown handoff target" error path (§ 3), which never needs the output guard because it never
+    # adds an answer. Workers always report back to the supervisor. `approval`, `remember` and
+    # `output_guard` are not workers — none is ever in `workers`, so none is a route the model can
+    # pick, only something the supervisor's own code (or a fixed edge, below) sends a turn to.
+    # `recall` sits between the guard and the supervisor on every turn, so it has one fixed edge, not a
+    # `Command`. Compiling with a checkpointer turns on saving: each run is saved under the `thread_id`
+    # api.py passes in (one thread = one chat), which is also what makes `interrupt()`/resume possible
+    # — see the file header.
     graph = StateGraph(ChatState)
     graph.add_node("guard", guard.make_node(classifier))
     graph.add_node("summarize", summarize.make_node(model))  # a pass-through until the chat is long
     graph.add_node("recall", recall.make_node(memory))
     graph.add_edge("summarize", "recall")
-    graph.add_node("supervisor", supervisor.make_node(model, workers), destinations=(*names, "approval", "remember", END))
+    graph.add_node(
+        "supervisor", supervisor.make_node(model, workers),
+        destinations=(*names, "approval", "remember", "output_guard", END),
+    )
     graph.add_node("remember", remember.make_node(model, memory))
+    graph.add_node("output_guard", output.make_node())
     graph.add_node("approval", _make_approval_node(tools))
     graph.add_edge("recall", "supervisor")
-    graph.add_edge("remember", END)
+    graph.add_edge("remember", "output_guard")
+    graph.add_edge("output_guard", END)
     graph.add_edge("approval", END)
     for worker in workers:
         graph.add_node(worker.name, worker.make_node(model, tools))
