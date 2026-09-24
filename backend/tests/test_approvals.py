@@ -185,6 +185,19 @@ def test_tainted_chat_approval_card_names_the_research_tool(tmp_path):
         assert "search_knowledge" in pending["taint_sources"]
 
 
+def test_after_youtube_research_the_card_names_the_youtube_tool(tmp_path):
+    """The flow the "ask with a warning" decision was made for (S2 → S3): research first, then "Save
+    those ideas". The card must be tainted AND name the YouTube tool that tainted the chat, not just say
+    "untrusted", so the owner knows which outside text to be wary of before approving."""
+    with app_client(tmp_path, fake_model(["Here are 3 desk-setup ideas."])) as (client, app):
+        thread_id = send(client, "What's trending in desk-setup videos?")[0][1]["thread_id"]
+
+        pending = approval_payload(send(client, "Save those ideas", thread_id))
+        assert pending["tainted"] is True
+        assert "query_youtube_trends" in pending["taint_sources"]
+        assert saved_files(tmp_path / "ideas") == []  # nothing written before the click
+
+
 def test_resume_with_the_wrong_id_is_409(tmp_path):
     """A stale card (an id that isn't the one actually pending) must be refused with 409, not silently
     accepted — approving the wrong request would run a tool the owner never actually clicked Approve

@@ -67,6 +67,11 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
             model, tools, NAME, PROMPT, state["task"], tainted_in=state.get("tainted", False),
         )
         update = {"messages": [r.reply], "spent_usd": r.spent_usd, "answered_by": NAME}
-        return update | ({"tainted": True} if r.tainted else {})
+        if r.pending:  # english_coach has no tools today; kept so every worker honours the same loop contract
+            update["pending_approval"] = r.pending
+        if r.tainted:
+            update["tainted"] = True
+            update["taint_sources"] = r.taint_sources
+        return update
 
     return english_coach
