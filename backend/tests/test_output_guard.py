@@ -298,3 +298,15 @@ def test_prompt_sentences_covers_every_prompt_module():
         summarize_module.SUMMARY_PROMPT,
     ):
         assert _first_long_sentence(prompt) in sentences
+
+
+def test_arty_s_own_fixed_replies_are_never_withheld():
+    """False-positive guard: the fixed replies our own code sends (not found, step-limit note, approval
+    lines) must pass the leak check. NOT_FOUND also appears inside rag_agent's prompt, so a looser matcher
+    would withhold every honest "not found". If a prompt edit ever makes one of these match, this fails."""
+    from artlab.agents.rag_agent import NOT_FOUND
+    from artlab.agents.supervisor import STEP_LIMIT_NOTICE
+    from artlab.guards.output import check_output
+
+    fixed = [NOT_FOUND, STEP_LIMIT_NOTICE, "OK, nothing was saved.", "I'd like to run save_ideas: waiting for your approval."]
+    assert all(check_output(text).ok for text in fixed)
