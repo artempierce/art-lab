@@ -184,6 +184,30 @@ def test_model_that_always_asks_for_a_tool_is_capped_at_three():
     assert len(model_traces) == 4
 
 
+class AlwaysAsksForAForbiddenTool(AlwaysAsksForATool):
+    """Like AlwaysAsksForATool, but always asks for a tool the gateway refuses (not on the allow-list):
+    what a model does when an injection keeps telling it to call something it may not."""
+
+    def _reply(self, messages):
+        self.calls.append(1)
+        if self.tool_specs:
+            return AIMessage("", tool_calls=[{"name": "forbidden", "args": {}, "id": f"call-{len(self.calls)}", "type": "tool_call"}])
+        return AIMessage("done")
+
+
+def test_refused_requests_use_up_the_budget_so_the_loop_still_ends():
+    """Regression guard: refused (and malformed) requests count towards MAX_TOOL_CALLS too. If only tools
+    that actually ran counted, a model that keeps asking for a refused tool would loop forever, paying
+    for a model call each round. Here nothing ever runs, and the loop still stops at MAX_TOOL_CALLS + 1."""
+    model = AlwaysAsksForAForbiddenTool()
+    result, traces = run_loop(model, registry(echo=lambda query: f"result for {query}"), "test_agent", "hello there")
+
+    assert result.tool_calls == 0  # nothing ran…
+    assert len(model.calls) == MAX_TOOL_CALLS + 1  # …and the loop still ended
+    assert result.reply.content == "done"
+    assert sum(t["status"] == "error" for t in traces if t["stage"] == "tool") == MAX_TOOL_CALLS
+
+
 def test_four_tools_requested_at_once_only_three_run():
     """docs/contracts.md § 9: the budget check applies per requested call, in order, even when several
     arrive in the same reply — the 4th gets a fixed "budget used up" ToolMessage instead of running,
