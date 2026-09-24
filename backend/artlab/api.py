@@ -51,8 +51,10 @@ from artlab.tools.catalog import build_tools
 # variables. LangChain and LangSmith read them from there automatically.
 load_dotenv(REPO_ROOT / ".env")
 
-# Nodes whose model output is internal and must not appear in the chat: the supervisor's model call
-# produces a routing decision (structured output), not an answer for you.
+# Nodes whose *streamed* model output is internal and must not appear in the chat: the supervisor's
+# model call produces a routing decision (structured output), streamed as tool-call chunks, not an
+# answer for you. This only hides those chunks — a whole message the node adds directly (e.g. the
+# step-limit note, Phase 3) still reaches the browser; see the AIMessageChunk check below.
 HIDDEN_NODES = {"supervisor"}
 
 
@@ -147,8 +149,11 @@ def create_app(
                     else:
                         message, meta = chunk
                         # Forward only assistant text from answering nodes: streamed pieces ("AIMessageChunk")
-                        # and whole replies a node added directly ("ai", e.g. the guard's refusal).
-                        if meta.get("langgraph_node") in HIDDEN_NODES:
+                        # and whole replies a node added directly ("ai", e.g. the guard's refusal). Only the
+                        # streamed chunks are hidden for HIDDEN_NODES — a whole message such a node adds
+                        # directly (e.g. the supervisor's step-limit note) is never a routing decision, so it
+                        # still reaches the browser.
+                        if message.type == "AIMessageChunk" and meta.get("langgraph_node") in HIDDEN_NODES:
                             continue
                         if message.type in ("ai", "AIMessageChunk") and (text := text_of(message)):
                             yield sse("token", {"text": text})
