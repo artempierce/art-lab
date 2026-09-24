@@ -12,9 +12,10 @@ Tenet 2 there: a model only *asks* for an action; our code decides whether it ha
                 the tool is read-only                                tools that change data ("mutating") always
                                                                      need your Approve/Reject click (Phase 6,
                                                                      docs/contracts.md § 10) before they run
-    2. run      the tool, in a worker thread, with a per-tool timeout; any exception or timeout from the
-                tool gets one retry, and a second failure comes back as a failed `ToolResult` instead of
-                raising
+    2. run      the tool, with a per-tool timeout; a plain function runs in a worker thread, an async one
+                (Phase 9b's `ask_<callee>`, tools/agents.py) is awaited directly, in this same async
+                context — either way, any exception or timeout gets one retry, and a second failure comes
+                back as a failed `ToolResult` instead of raising
     3. render   its return value as `Piece`s (tools/untrusted.py)
     4. scan     every untrusted piece for known injection phrasings on arrival (guards/input.py); a match
                 sets `flagged=True` — the text is still returned, flagging reports, it doesn't delete
@@ -254,7 +255,20 @@ class ToolRegistry:
         error: str | None = None
         for attempt in (1, 2):
             try:
-                value = await asyncio.wait_for(asyncio.to_thread(tool.fn, **args), timeout=tool.timeout_s)
+                # Phase 9b (docs/contracts.md § 13): an *agent* tool (tools/agents.py's `ask_<callee>`)
+                # is a coroutine function, not a plain blocking one — it has to `await` a nested
+                # `run_tool_loop`, which itself awaits the model and, for its own tool calls, this same
+                # `call`. `asyncio.to_thread` runs a function in a worker thread with its own event
+                # loop context, which would break two things at once: you can't `await` from inside a
+                # thread's plain function call, and `get_stream_writer()` (agents/tool_loop.py) reads a
+                # contextvar the graph's *async* run sets up — a worker thread never sees it, so the
+                # nested loop's trace lines would silently vanish. So a coroutine function is awaited
+                # directly, in this same async context, exactly like the `model.ainvoke(...)` calls it
+                # will make; only a plain, synchronous tool still goes through `to_thread`.
+                if inspect.iscoroutinefunction(tool.fn):
+                    value = await asyncio.wait_for(tool.fn(**args), timeout=tool.timeout_s)
+                else:
+                    value = await asyncio.wait_for(asyncio.to_thread(tool.fn, **args), timeout=tool.timeout_s)
             except asyncio.TimeoutError:
                 error = f"timeout after {tool.timeout_s}s"
                 continue
