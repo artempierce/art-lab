@@ -38,7 +38,7 @@ searching the knowledge base, blocked, or happy (with a wink).
 | `backend/artlab/graph.py` → `approval` node | Approval gate: pauses the run (`interrupt()`) on a recorded data-changing request, and after your click runs exactly the stored arguments |
 | `backend/artlab/config.py` | Where things live on disk |
 | `backend/artlab/memory/` | Long-term memory: `store.py` (Chroma collection "memory", upsert by key), extraction from your words only (never tool output), flagged messages skipped |
-| `backend/skills/` | SKILL.md files for phases 5+: retention-analysis, hook-formulas, style-guide; `loader.py` loads a skill's full text on demand |
+| `backend/skills/` | SKILL.md files: retention-analysis, hook-formulas, style-guide. Read at startup by `backend/artlab/skills/loader.py`; agents see only names and descriptions, and load the full text on demand with `load_skill` |
 | `knowledge/` | Sample documents to search: 6 fictional studio policies + a poisoned test note |
 | `evals/` | Golden question sets: routing, rag, youtube_researcher, content_ideator, english_coach; eval runners |
 | `backend/tests/` | 204 tests on the fake model and local embeddings — no API calls, $0 |
