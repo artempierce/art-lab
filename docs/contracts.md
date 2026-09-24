@@ -438,3 +438,39 @@ True when the classifier flagged this message).
 | M1 memory | Sonnet (Opus review) | `memory/__init__.py`, `memory/store.py`, `agents/remember.py`, `agents/recall.py`, `agents/state.py`, `agents/guard.py` (turn_flagged + goto recall), `agents/supervisor.py` (done → remember; memory block), `agents/respond.py` (memory block), `graph.py`, `api.py` (create the MemoryStore; injectable for tests), `model.py` (fake `Facts`), tests |
 | M2 summarize | Sonnet | `agents/summarize.py`, `tests/test_summarize.py`, plus the fake's summarize reply in `model.py` if M1's version isn't in yet (then Opus merges) |
 | wiring + colour | Opus at integration | insert `summarize` between guard and recall; the `memory` stage colour in `TracePanel.tsx`/`index.css` |
+
+## 12. Phase 8: skills loaded on demand
+
+Design book FR-10 / W8 / S9: an agent sees only each skill's **name and one-line description**; the full text enters its
+context only when it asks, through a tool. That's the difference between an agent and a skill (design book: "just know-how
+→ skill").
+
+**Loader (`skills/loader.py`):** `load_skills(dir=SKILLS_DIR) -> dict[str, Skill]`, run once at startup.
+`Skill(name, description, body)` is read from `backend/skills/<name>/SKILL.md` (YAML front matter + markdown body; the
+front-matter `name` must equal the folder name, otherwise it's skipped with a warning). `SKILLS_DIR` goes in `config.py`.
+
+**Tool `load_skill(name: str) -> str`** (`tools/skills.py`, a factory closing over the loaded skills): returns the body, or
+`"No skill named '<name>'. Available: hook-formulas, retention-analysis, style-guide."`. Tier `read_only`,
+**`untrusted_output=False`**: skills are our own reviewed repo files, not outside text, so loading one doesn't taint the
+chat. Allowed for `youtube_researcher`, `content_ideator` and `english_coach`.
+
+**Tool loop:** if an agent may use `load_skill`, `run_tool_loop` appends a skills index to its system prompt:
+`"Skills you can load with load_skill (load one only when the task needs it):\n- hook-formulas: …"`. It's built from the
+loaded skills, so adding a SKILL.md folder needs no code change. A `load_skill` call writes its trace line with
+**stage `skill`**: `"loaded hook-formulas"` or `"unknown skill 'x'"` (instead of the generic `tool` line).
+
+**Prompts get leaner:** the hook patterns folded into content_ideator's PROMPT and the style rules folded into
+english_coach's PROMPT (stand-ins added in Phase 5 "until skills exist") are **removed**. The prompt now says to load
+the matching skill when the task needs it. That's the point of Phase 8: know-how lives in skills, not prompts.
+
+**Fake model:** add `load_skill` to `FAKE_TOOL_HINTS` with a keyword → skill map, used to fill the `name` argument:
+`hook(s)` → `hook-formulas`; `retention|drop-off|watch time` → `retention-analysis`; `grammar|polish|proofread|style` →
+`style-guide`. When the hint matches, the fake calls `load_skill(name=<mapped skill>)` first, then answers. So S9 "Write
+catchy hooks for these 3 ideas" → content_ideator → `skill loaded hook-formulas` → answer.
+
+**Frontend:** a `skill` stage colour.
+
+**Who owns what (Phase 8):** one ticket, **S1** (Sonnet, Opus review): `skills/__init__.py`, `skills/loader.py`,
+`tools/skills.py`, `tools/catalog.py`, `config.py` (SKILLS_DIR), `agents/tool_loop.py`, `agents/content_ideator.py` and
+`agents/english_coach.py` (prompt slimming), `model.py` (the fake load_skill), `frontend/src/index.css` +
+`TracePanel.tsx` (the `skill` colour), tests.
