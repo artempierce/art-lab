@@ -22,7 +22,7 @@ import re
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from pydantic import Field, PrivateAttr
 
@@ -65,7 +65,7 @@ def make_model() -> BaseChatModel:
 
 
 class FakeChatModel(BaseChatModel):
-    """A free, predictable stand-in for Claude. It plays four roles:
+    """A free, predictable stand-in for Claude. It plays five roles:
 
       supervisor       when asked for a RouteDecision (structured output), it routes to rag_agent if
                        the question contains a KNOWLEDGE_HINTS word, otherwise to "respond"
@@ -74,16 +74,22 @@ class FakeChatModel(BaseChatModel):
       rag_agent retry  when asked for a Rephrase (structured output, after a first search found
                        nothing), it rewords the question by appending " policy" — deterministic, and
                        different enough from the original to plausibly match a second time
+      tool loop        when bound to a *real* tool list (docs/contracts.md § 9, run_tool_loop): it
+                       calls the first tool, then answers quoting its result — see `_reply_with_tools`
       respond          otherwise, it answers with the next of `replies`, in a loop
 
     How structured output works (and why `bind_tools` is here): LangChain's `with_structured_output(Schema)`
     turns the schema into a *tool* the model is forced to call, then reads the tool call's arguments
     back as a Schema object. Real Claude does that natively; this fake does it by remembering which
-    tool it was bound to (`bind_tools`) and returning a tool call for it.
+    tool it was bound to (`bind_tools`) and returning a tool call for it. `run_tool_loop` binds a plain
+    *list* of tools instead (no forced choice), so `bind_tools` tells the two apart by the keyword
+    arguments `with_structured_output` passes along (checked against the installed langchain-core,
+    1.6.4): `tool_choice="any"` and `ls_structured_output_format=...`, present only for structured output.
     """
 
     replies: list[str] = Field(default_factory=lambda: [FAKE_REPLY])
     tool_name: str | None = None  # set by bind_tools: the structured-output schema we must "fill in"
+    tool_specs: list | None = None  # set by bind_tools: a real tool list, from run_tool_loop (§ 9)
     _turn: Any = PrivateAttr(default_factory=itertools.count)  # which reply comes next
 
     @property
@@ -91,10 +97,33 @@ class FakeChatModel(BaseChatModel):
         return "fake"
 
     def bind_tools(self, tools: list, **kwargs: Any) -> "FakeChatModel":
-        """Return a copy that answers by calling the first tool (what `with_structured_output` needs)."""
-        tool = tools[0]
-        name = tool.__name__ if isinstance(tool, type) else tool["name"]
-        return self.model_copy(update={"tool_name": name})
+        """Return a copy bound to `tools`, playing whichever tool-calling role fits how it was called
+        (see the class docstring): structured output forces one schema (`tool_name`); a plain tool list
+        from `run_tool_loop` is remembered whole (`tool_specs`), so `_reply_with_tools` can call one."""
+        if "ls_structured_output_format" in kwargs:
+            tool = tools[0]
+            name = tool.__name__ if isinstance(tool, type) else tool["name"]
+            return self.model_copy(update={"tool_name": name})
+        return self.model_copy(update={"tool_specs": tools})
+
+    def _reply_with_tools(self, messages: list[BaseMessage]) -> AIMessage:
+        """The fake's `run_tool_loop` behaviour (docs/contracts.md § 9), for a real tool list.
+
+        If the last message is already a `ToolMessage` (a tool has just answered), quote the start of
+        it as the final answer — proving a real tool result reached the model, for $0. Otherwise call
+        the *first* bound tool, filling every required string argument with the task text (the last
+        `HumanMessage`): the fake doesn't know what a good argument looks like, but this is deterministic
+        and drives `run_tool_loop` through one real tool call before it answers.
+        """
+        if messages and isinstance(messages[-1], ToolMessage):
+            start = str(messages[-1].content)[:200]
+            return AIMessage(f"(Fake model, no API call.) The tool said: {start}")
+
+        task = next(m.content for m in reversed(messages) if isinstance(m, HumanMessage))
+        spec = self.tool_specs[0]["function"]
+        params = spec["parameters"]
+        args = {n: task for n in params.get("required", []) if params["properties"][n].get("type") == "string"}
+        return AIMessage("", tool_calls=[{"name": spec["name"], "args": args, "id": "fake-call", "type": "tool_call"}])
 
     def _reply(self, messages: list[BaseMessage]) -> AIMessage:
         """Decide what to say, based on which role we're playing (see the class docstring)."""
@@ -113,6 +142,8 @@ class FakeChatModel(BaseChatModel):
             return AIMessage("", tool_calls=[{"name": self.tool_name, "args": args, "id": "fake-call", "type": "tool_call"}])
         if self.tool_name:
             raise ValueError(f"the fake model can't fill in {self.tool_name}")
+        if self.tool_specs:
+            return self._reply_with_tools(messages)
 
         prompt = str(messages[-1].content)
         source = re.search(r"<untrusted_retrieval[^>]*>\n(.*?)\n</untrusted_retrieval>", prompt, re.DOTALL)
