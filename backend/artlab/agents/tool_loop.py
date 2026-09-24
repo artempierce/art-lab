@@ -111,9 +111,9 @@ async def run_tool_loop(
            it (`ToolDenied`), report bad arguments, or return a result. Every outcome becomes exactly
            one `ToolMessage`, replying to that call's own id — real Claude requires one-to-one replies,
            and the fake model's tests check the same thing. Then go back to step 3.
-        4. Once MAX_TOOL_CALLS tools have actually run, every later call in step 3 uses the *unbound*
-           model — no tools to ask for, so it must answer in text. That's what guarantees this loop
-           ends: at most MAX_TOOL_CALLS tool-running turns, plus one final answer-only call.
+        4. Once the model has asked for MAX_TOOL_CALLS tools (run, refused or malformed: all count),
+           every later call in step 3 uses the *unbound* model — no tools to ask for, so it must answer
+           in text. That's what guarantees this loop ends: at most MAX_TOOL_CALLS + 1 model calls.
 
     Taint (docs/contracts.md § 1): each tool call passes `tainted_in or tainted_so_far`, so a
     data-changing tool requested *after* an untrusted result — even earlier in this same turn — is
@@ -131,10 +131,14 @@ async def run_tool_loop(
     spent_usd = 0.0
     tainted_so_far = False
     calls_run = 0  # tools that actually ran through the gateway (LoopResult.tool_calls)
+    # Every tool call the model *asks for* counts towards the budget, whether it runs, is refused or has
+    # bad arguments. Counting only the ones that ran would let a model that keeps asking for a refused
+    # tool (say, because an injection told it to) loop forever, paying for a model call each time.
+    requested = 0
 
     while True:
         # 4. Budget spent → fall back to the model with no tools bound, so it can't ask for another.
-        current_model = bound_model if calls_run < MAX_TOOL_CALLS else model
+        current_model = bound_model if requested < MAX_TOOL_CALLS else model
 
         # 3. One model call. Every call — whether it asks for tools or answers — gets its own trace
         #    line under this worker's own stage name, the same way rag_agent reports its calls.
@@ -161,7 +165,7 @@ async def run_tool_loop(
 
             # The budget: once MAX_TOOL_CALLS have run, later requests in *this same* reply are
             # answered with a fixed message instead — the model asked for too much at once.
-            if calls_run >= MAX_TOOL_CALLS:
+            if requested >= MAX_TOOL_CALLS:
                 messages.append(ToolMessage(
                     f"the tool budget ({MAX_TOOL_CALLS} calls) is used up for this turn", tool_call_id=call_id,
                 ))
@@ -174,6 +178,7 @@ async def run_tool_loop(
             # Gateway check first (§ 4): unknown tool, not on this agent's allow-list, or (from
             # Phase 6) a mutating tool that needs approval or is refused outright because the chat is
             # tainted. A refusal never runs the tool and never counts against the budget.
+            requested += 1  # counted before the checks: a refused or malformed call uses budget too
             tainted_now = tainted_in or tainted_so_far
             try:
                 tool = tools.check(agent, name, tainted_now)
