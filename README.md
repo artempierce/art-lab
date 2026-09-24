@@ -31,7 +31,7 @@ searching the knowledge base, blocked, or happy (with a wink).
 | `backend/artlab/api.py` | FastAPI server: streams each chat turn to the browser, lists and loads chats |
 | `backend/artlab/graph.py` | Graph assembly: wires together nodes from `backend/artlab/agents/` |
 | `backend/artlab/agents/` | Each node in its own file: `state.py`, `common.py`, `guard.py`, `supervisor.py`, `rag_agent.py`, `respond.py`, `workers.py` (worker registry) |
-| `backend/artlab/guards/input.py` | Input guard (size, injection rules, per-chat budget); the injection rules also scan documents |
+| `backend/artlab/guards/` | Guard layer 1 (`input.py`: size, injection rules, per-chat budget; the injection rules also scan documents) and layer 2 (`classifier.py`: a local ONNX prompt-injection classifier — "reduce privileges", not block) |
 | `backend/artlab/model.py` | Real Claude (`claude-haiku-4-5`) or a free fake model; prices and cost formula |
 | `backend/artlab/rag/` | Knowledge base: `ingest.py` (files + web pages → chunks), `web.py` (safe fetch), `embeddings.py` (local, free), `knowledge.py` (Chroma + search) |
 | `backend/artlab/tools/` | Registry (who may call what), tool gateway with per-tool timeout and retry, untrusted wrapper, stub tools, catalog |
@@ -54,7 +54,7 @@ What happens when you ask *"Who needs to approve a $900 equipment purchase?"*:
 2. **`api.ts → streamChat()`** POSTs `{message, thread_id}` to `/api/chat` and reads the response as a stream.
 3. **`api.py → chat()`** makes a **trace ID** (this run) and uses the **thread ID** (this chat), then runs the graph.
 4. The **checkpointer** loads the chat's earlier messages from SQLite, and your message is appended.
-5. **`agents/guard.py`** runs **`check_input()`**: size → injection rules → budget. Blocked? A refusal, the run ends, no model is called.
+5. **`agents/guard.py`** runs **`check_input()`**: size → injection rules → budget. Blocked? A refusal, the run ends, no model is called. Passed? The local injection **classifier** (`guards/classifier.py`, if it's been downloaded) scores the message; at or above threshold, the chat is marked **tainted** — the message still gets answered, but data-changing tools are refused in this chat from then on.
 6. **`agents/supervisor.py`** — **Arty**, the *main agent* — asks the model for a **`RouteDecision`**: a worker (e.g. `rag_agent`) or direct `respond`, with a reason and the question rewritten to stand alone. The route comes from the **worker registry** in `agents/workers.py`. Step counting starts (max 5 steps).
 7. **`agents/rag_agent.py`** calls **`search_knowledge`** through the **tool gateway** in `tools/registry.py` (only rag_agent may). Search embeds the question locally, asks Chroma for the closest chunks, drops weak matches and flagged chunks, and returns the top 4 — each **wrapped as untrusted** by the gateway. If the first search finds nothing, rag_agent rephrases and searches again (max 2 searches).
 8. rag_agent asks the model to answer **only from those sources**, citing `[1] [2]`; nothing relevant → "I couldn't find that in the knowledge base", with no model call. The sources are attached to the reply.
@@ -78,6 +78,15 @@ cd ../frontend && npm install     # web dependencies
 
 To use real Claude, put your `ANTHROPIC_API_KEY` (and optionally `LANGSMITH_API_KEY`) in `.env` and set
 `ARTLAB_FAKE_LLM=0`.
+
+The guard's layer-2 injection classifier (`backend/artlab/guards/classifier.py`) is **off until you
+download it** — a one-time, free, ~740 MB fetch of its ONNX export:
+
+```bash
+cd backend && uv run python -m artlab.guards.classifier
+```
+
+Without it, the guard runs layer 1 (regex) only, exactly as before this feature existed.
 
 ## Knowledge base
 
@@ -107,7 +116,8 @@ Open http://localhost:5173. Chats are stored in `data/artlab.db` — delete it t
 ## Test
 
 ```bash
-cd backend && uv run pytest       # 64 tests: fake model + local embeddings, no API calls, no cost
+cd backend && uv run pytest       # 124 tests: fake model + local embeddings, no API calls, no cost
+                                   # (one test class runs the real classifier and is skipped until it's downloaded)
 cd backend && uv run pytest tests/test_retrieval_eval.py -s   # retrieval report: rank of the right file per golden question
 cd frontend && npm run build      # type-check + production build
 ```

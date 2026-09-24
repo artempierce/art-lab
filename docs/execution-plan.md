@@ -75,7 +75,7 @@ change (plus its own tests), which is what makes parallel work safe.
 | ID | Task | Model | Owns | Done when |
 |---|---|---|---|---|
 | W0.1 | Merge PR #3; optionally require CI before merging to `main` | Sol | — | `main` has Arty + CI; protection on if wanted |
-| W0.2 | Decide the classifier policy: reduce privileges / block / warn | Sol | — | Decision recorded in the design book |
+| W0.2 | Decide the classifier policy: reduce privileges / block / warn | Sol | — | ✅ **Reduce privileges** (2026-09-23), design book Q16 |
 | W0.3 | Real-Claude smoke test: 3 messages (< $0.01) | Opus, with Sol's OK | — | Routing, cited answer and "not found" seen on real Claude + in LangSmith |
 | W0.4 | **Split `graph.py` into one module per node**, no behaviour change | Sonnet | `backend/artlab/graph.py`, new `backend/artlab/agents/*.py` | Tests pass unchanged; code identical by syntax-tree comparison (as in the docs PR) |
 | W0.5 | **Contracts** for Phases 3–10: state fields (`steps`, typed `artifacts`, `pending_approval`), the worker-node signature, how a worker registers a route, trace stage names + colours, tool-registry additions (stubs, retries, timeouts), approval event shape; the **trust boundary** (§ 4a): each tool declares whether its output is untrusted (default: yes), a per-run `tainted` flag, and how taint passes through artifacts | Opus | `docs/contracts.md`, typed stubs, skipped tests | Every Wave 1–3 ticket can be written against it |
@@ -218,7 +218,7 @@ files twice, and not carrying one giant conversation.
 ## 9. Decisions needed before Wave 0
 
 1. Approve this plan (or change the model routing).
-2. W0.2: classifier policy — reduce privileges (recommended), block, or warn.
+2. ~~W0.2: classifier policy — reduce privileges (recommended), block, or warn.~~ Decided: reduce privileges.
 3. W0.1: require CI to pass before merging to `main`?
 4. W0.6: exempt `art-lab/` from the GateGuard file gate?
 5. W0.3: OK to spend < $0.01 on the real-Claude smoke test?

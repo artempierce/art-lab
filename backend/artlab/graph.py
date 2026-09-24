@@ -50,6 +50,7 @@ from langgraph.graph import END, START, StateGraph
 from artlab.agents import guard, supervisor
 from artlab.agents.state import ChatState
 from artlab.agents.workers import WORKERS, WorkerSpec
+from artlab.guards.classifier import InjectionClassifier
 from artlab.tools.registry import ToolRegistry
 
 
@@ -58,6 +59,7 @@ def build_graph(
     checkpointer: BaseCheckpointSaver,
     tools: ToolRegistry,
     workers: tuple[WorkerSpec, ...] = WORKERS,
+    classifier: InjectionClassifier | None = None,
 ):
     """Assemble and compile the chat graph.
 
@@ -68,6 +70,8 @@ def build_graph(
         tools:        the tool registry (tools/catalog.py). Workers search through it.
         workers:      the worker registry (agents/workers.py). Defaults to every real worker; tests
                       can pass their own stub `WorkerSpec`s instead.
+        classifier:   the guard's layer-2 injection classifier (docs/contracts.md § 8). None (the
+                      default) means "off" — passed straight through to `guard.make_node`.
 
     Returns:
         A compiled graph. api.py calls `graph.astream(...)` on it once per message.
@@ -85,7 +89,7 @@ def build_graph(
     # report back to the supervisor. Compiling with a checkpointer turns on saving: each run is saved
     # under the `thread_id` api.py passes in (one thread = one chat).
     graph = StateGraph(ChatState)
-    graph.add_node("guard", guard.make_node())
+    graph.add_node("guard", guard.make_node(classifier))
     graph.add_node("supervisor", supervisor.make_node(model, workers), destinations=(*names, END))
     for worker in workers:
         graph.add_node(worker.name, worker.make_node(model, tools))

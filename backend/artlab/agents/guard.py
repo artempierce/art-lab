@@ -1,11 +1,17 @@
 """
 agents/guard.py — node 1 of the graph: the input guard.
 
-Runs first on every turn, before any model sees the message. It checks the newest message against
-the input guard rules (artlab.guards.input) and either blocks the turn with a fixed refusal, or lets
-it through to the supervisor. Blocking here means a bad message never costs a model call.
+Runs first on every turn, before any model sees the message. Two layers, in order:
+
+  1. the regex rules (artlab.guards.input.check_input) — cheap, deterministic; a match blocks the
+     turn outright with a fixed refusal, so a bad message never costs a model call.
+  2. the local injection classifier (artlab.guards.classifier), only once layer 1 has passed. Its
+     policy is "reduce privileges", not "block" (docs/contracts.md § 8): a flagged message is still
+     answered, but the chat is marked tainted, so data-changing tools are refused in it from then on
+     — the same `tainted` flag the tool gateway sets when untrusted retrieval enters a chat.
 """
 
+import asyncio
 import time
 from typing import Literal
 
@@ -16,14 +22,28 @@ from langgraph.types import Command
 
 from artlab.agents.common import ms_since
 from artlab.agents.state import ChatState
+from artlab.guards.classifier import THRESHOLD, InjectionClassifier
 from artlab.guards.input import check_input
 
 
-def make_node():
-    """Build the `guard` node. No dependencies to close over (the guard doesn't call a model)."""
+def make_node(classifier: InjectionClassifier | None = None):
+    """Build the `guard` node.
+
+    Args:
+        classifier: the layer-2 injection classifier to run once the regex layer passes. None (the
+                     default) means "off" — not downloaded yet, or a test wants the fast,
+                     deterministic path with no classifier at all (docs/contracts.md § 8).
+    """
 
     async def guard(state: ChatState) -> Command[Literal["supervisor", "__end__"]]:
         """Node 1 — run the input guard on the newest message, then either continue or stop.
+
+        Steps:
+          1. the regex check (`check_input`). A match ends the turn right here — the classifier
+             never runs on a message layer 1 already blocked.
+          2. if layer 1 passed and we have a classifier, score the message. A high score, or the
+             classifier raising, taints the chat instead of blocking it (fail-safe: an error must
+             never be read as "trusted") but lets the run continue to the supervisor either way.
 
         Returns a `Command`, which does two jobs in one return value: `update` changes the state, and
         `goto` picks the next node. The `Literal[...]` type tells LangGraph (and graph drawings) which
@@ -44,8 +64,30 @@ def make_node():
             refusal = AIMessage(f"Blocked by the input guard ({result.rule}): {result.reason}.")
             return Command(update={"messages": [RemoveMessage(id=message.id), refusal], "answered_by": ""}, goto=END)
 
-        # Passed. Report it (with budget used), clear last turn's routing notes and step count, and hand over.
-        write({"stage": "guard", "status": "ok", "detail": result.reason, "ms": ms_since(start)})
-        return Command(update={"task": "", "answered_by": "", "steps": 0, "handoff": ""}, goto="supervisor")
+        # Passed layer 1. Clear last turn's routing notes and step count either way; the classifier
+        # (layer 2) only decides whether `tainted` is also set below.
+        update = {"task": "", "answered_by": "", "steps": 0, "handoff": ""}
+        detail = result.reason  # today's detail text; the classifier appends its own part to it
+
+        if classifier is None:
+            detail += " · classifier off"
+        else:
+            try:
+                # score() runs the ONNX model — CPU work — so it runs off the event loop.
+                score = await asyncio.to_thread(classifier.score, message.content)
+            except Exception as exc:
+                detail += f" · classifier failed ({type(exc).__name__}: {exc}) → chat tainted, data-changing tools locked"
+                write({"stage": "guard", "status": "flagged", "detail": detail, "ms": ms_since(start)})
+                return Command(update={**update, "tainted": True}, goto="supervisor")
+
+            if score >= THRESHOLD:
+                detail += f" · classifier {score:.2f} ≥ {THRESHOLD:.2f} → chat tainted, data-changing tools locked"
+                write({"stage": "guard", "status": "flagged", "detail": detail, "ms": ms_since(start)})
+                return Command(update={**update, "tainted": True}, goto="supervisor")
+
+            detail += f" · classifier {score:.2f}"
+
+        write({"stage": "guard", "status": "ok", "detail": detail, "ms": ms_since(start)})
+        return Command(update=update, goto="supervisor")
 
     return guard
