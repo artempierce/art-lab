@@ -24,10 +24,33 @@ export type Agent = { name: string; description: string; tools: AgentTool[] }
 export type Source = { n: number; source: string; heading: string; text: string; score: number }
 
 /**
- * One chat bubble. `error` marks a bubble that shows a failure instead of a real answer; `sources`
- * are the passages rag_agent answered from (empty for other answers).
+ * A mutating tool (e.g. save_ideas) waiting for your Approve/Reject click (Phase 6, contracts.md §
+ * 10). `args` are the exact arguments the tool would run with; `tainted` is true when this chat has
+ * read untrusted content, and `taint_sources` says where from (e.g. "fetch_comments").
  */
-export type Message = { role: 'user' | 'assistant'; content: string; error?: boolean; sources?: Source[] }
+export type Approval = {
+  id: string
+  agent: string
+  tool: string
+  args: Record<string, unknown>
+  tainted: boolean
+  taint_sources: string[]
+}
+
+/**
+ * One chat bubble. `error` marks a bubble that shows a failure instead of a real answer; `sources`
+ * are the passages rag_agent answered from (empty for other answers). `approval` is attached by an
+ * `approval` event and shows the Approve/Reject card (ApprovalCard.tsx); `approvalDecision` is set
+ * once you've clicked one of its buttons, so the card can show its outcome and stay disabled.
+ */
+export type Message = {
+  role: 'user' | 'assistant'
+  content: string
+  error?: boolean
+  sources?: Source[]
+  approval?: Approval
+  approvalDecision?: 'approved' | 'rejected'
+}
 
 /** One line in the trace panel, written by a graph node (e.g. stage "guard", status "ok"). */
 export type TraceLine = { stage: string; status: string; detail: string; ms: number }
@@ -36,14 +59,17 @@ export type TraceLine = { stage: string; status: string; detail: string; ms: num
 export type RunSummary = { input_tokens: number; output_tokens: number; cost_usd: number; ms: number }
 
 /**
- * One event from the POST /api/chat stream. The `type` field says which kind it is, and
- * TypeScript uses it to know which other fields exist (a "discriminated union").
- * Order in a run: start → (trace | token)* → done   — or error instead of done.
+ * One event from the POST /api/chat (or /api/chat/resume) stream. The `type` field says which kind
+ * it is, and TypeScript uses it to know which other fields exist (a "discriminated union").
+ * Order in a run: start → (trace | token)* → done   — or error instead of done. A run that calls a
+ * mutating tool pauses instead: start → (trace | token)* → approval → done (the reply so far is
+ * "waiting for your approval"); resuming it with resumeChat below starts the same sequence again.
  */
 export type ChatEvent =
   | { type: 'start'; trace_id: string; thread_id: string }
   | ({ type: 'trace' } & TraceLine)
   | { type: 'token'; text: string }
+  | ({ type: 'approval' } & Approval)
   | ({ type: 'done'; sources: Source[] } & RunSummary)
   | { type: 'error'; message: string }
 
@@ -65,23 +91,14 @@ export const getThread = (threadId: string) =>
 export const getAgents = () => getJson<Agent[]>('/api/agents')
 
 /**
- * Send one message and call `onEvent` for every event the server streams back.
- * Resolves when the stream ends; throws if the backend can't be reached at all.
+ * Read an SSE response body and call `onEvent` for every event it contains. Shared by streamChat
+ * and resumeChat below, since both talk to endpoints that stream the same event shapes — this is
+ * the one place that knows the wire format, so it isn't duplicated between them.
  *
- * Why not the browser's built-in `EventSource`? It only supports GET requests, and we need to
- * POST the message. So we read the response body as a stream and split out the events ourselves.
+ * Why not the browser's built-in `EventSource`? It only supports GET requests, and both endpoints
+ * are POSTs. So we read the response body as a stream and split out the events ourselves.
  */
-export async function streamChat(
-  message: string,
-  threadId: string | null,
-  onEvent: (event: ChatEvent) => void,
-): Promise<void> {
-  // threadId null = new chat; the server creates an ID and sends it back in the `start` event.
-  const res = await fetch('/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, thread_id: threadId }),
-  })
+async function readEventStream(res: Response, onEvent: (event: ChatEvent) => void): Promise<void> {
   if (!res.ok || !res.body) throw new Error(`The server returned ${res.status}`)
 
   // Turn the raw byte stream into text, then read it piece by piece as it arrives.
@@ -107,4 +124,42 @@ export async function streamChat(
       if (name && data) onEvent({ type: name, ...JSON.parse(data) } as ChatEvent)
     }
   }
+}
+
+/**
+ * Send one message and call `onEvent` for every event the server streams back.
+ * Resolves when the stream ends; throws if the backend can't be reached at all.
+ */
+export async function streamChat(
+  message: string,
+  threadId: string | null,
+  onEvent: (event: ChatEvent) => void,
+): Promise<void> {
+  // threadId null = new chat; the server creates an ID and sends it back in the `start` event.
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, thread_id: threadId }),
+  })
+  await readEventStream(res, onEvent)
+}
+
+/**
+ * Answer a pending approval (Approve or Reject the tool it named) and call `onEvent` for the
+ * continuation's events — the same shapes streamChat delivers, since the backend resumes the same
+ * graph run. `id` must match the pending request's id (from its `approval` event); a stale id is
+ * treated as a reject by the backend.
+ */
+export async function resumeChat(
+  threadId: string,
+  id: string,
+  approve: boolean,
+  onEvent: (event: ChatEvent) => void,
+): Promise<void> {
+  const res = await fetch('/api/chat/resume', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ thread_id: threadId, id, approve }),
+  })
+  await readEventStream(res, onEvent)
 }

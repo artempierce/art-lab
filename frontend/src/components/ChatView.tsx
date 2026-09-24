@@ -8,7 +8,8 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
-import type { Message, Source } from '../api'
+import type { Approval, Message, Source } from '../api'
+import { ApprovalCard } from './ApprovalCard'
 import { Arty, type ArtyMood } from './Arty'
 
 type Props = {
@@ -17,6 +18,7 @@ type Props = {
   busy: boolean // an answer is streaming; sending is disabled
   mood: ArtyMood // how Arty looks right now (worked out in App)
   onSend: (text: string) => void // called with the message to send
+  onRespondApproval: (approval: Approval, approve: boolean) => void // Approve/Reject click on a message's card
 }
 
 // Clickable starters on the welcome screen. Clicking one sends it right away.
@@ -39,7 +41,7 @@ const STATUS: Record<ArtyMood, string> = {
 // The ribbon's ticker text. It's rendered twice in a row so the CSS animation can loop seamlessly.
 const TICKER = 'Ask me anything · Policies & processes · Hooks & titles · Every step shows in the trace · '
 
-export function ChatView({ title, messages, busy, mood, onSend }: Props) {
+export function ChatView({ title, messages, busy, mood, onSend, onRespondApproval }: Props) {
   const [draft, setDraft] = useState('')
   const endRef = useRef<HTMLDivElement>(null) // an empty marker after the last bubble
 
@@ -76,7 +78,14 @@ export function ChatView({ title, messages, busy, mood, onSend }: Props) {
           <div className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-8">
             {/* Only the last bubble can be "waiting" (the reply that's streaming in). */}
             {messages.map((m, i) => (
-              <Bubble key={i} message={m} waiting={busy && i === messages.length - 1} mood={mood} />
+              <Bubble
+                key={i}
+                message={m}
+                waiting={busy && i === messages.length - 1}
+                mood={mood}
+                busy={busy}
+                onRespondApproval={onRespondApproval}
+              />
             ))}
             <div ref={endRef} />
           </div>
@@ -127,9 +136,22 @@ export function ChatView({ title, messages, busy, mood, onSend }: Props) {
  *   your message        → right-aligned black card, text exactly as typed
  *   an error            → card with red text
  *   reply not started   → Arty (thinking or searching) with a status line
- *   a reply             → Arty + a white card, rendered as Markdown, with Sources if any
+ *   a reply             → Arty + a white card, rendered as Markdown, with Sources and/or an
+ *                          ApprovalCard if the reply has them
  */
-function Bubble({ message, waiting, mood }: { message: Message; waiting: boolean; mood: ArtyMood }) {
+function Bubble({
+  message,
+  waiting,
+  mood,
+  busy,
+  onRespondApproval,
+}: {
+  message: Message
+  waiting: boolean
+  mood: ArtyMood
+  busy: boolean
+  onRespondApproval: (approval: Approval, approve: boolean) => void
+}) {
   if (message.role === 'user') {
     return (
       <div className="card ml-auto max-w-[85%] bg-ink px-4 py-2.5 whitespace-pre-wrap text-white">{message.content}</div>
@@ -159,6 +181,14 @@ function Bubble({ message, waiting, mood }: { message: Message; waiting: boolean
           <Markdown>{message.content}</Markdown>
         </div>
         {message.sources && message.sources.length > 0 && <Sources sources={message.sources} />}
+        {message.approval && (
+          <ApprovalCard
+            approval={message.approval}
+            decision={message.approvalDecision}
+            busy={busy}
+            onRespond={(approve) => onRespondApproval(message.approval!, approve)}
+          />
+        )}
       </div>
     </div>
   )
