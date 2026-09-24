@@ -30,11 +30,16 @@ class WorkerSpec:
                  (e.g. "rag_agent")
     description  one line the supervisor's prompt shows, explaining when to route here
     make_node    the worker's node factory: make_node(model, tools) -> Node (docs/contracts.md § 2)
+    produces     the kind of artifact this worker's answer is, e.g. "research" (Phase 9,
+                 docs/contracts.md § 13) — shown in a later plan step's task as "Input from <name>
+                 (<produces>): ...". Defaults to "answer" so existing stub workers (tests) don't need
+                 to set it.
     """
 
     name: str
     description: str
     make_node: Callable[[BaseChatModel, ToolRegistry], Node]
+    produces: str = "answer"
 
 
 # Every worker the supervisor can route to today. Descriptions are the same wording the old, fixed
@@ -66,11 +71,13 @@ WORKERS: tuple[WorkerSpec, ...] = (
             "making a video, or diagnosing a video's performance."
         ),
         make_node=youtube_researcher.make_node,
+        produces="research",
     ),
     WorkerSpec(
         name="content_ideator",
         description="video ideas, hooks, outlines - brainstorming what video to make next.",
         make_node=content_ideator.make_node,
+        produces="ideas",
     ),
     WorkerSpec(
         name="english_coach",
@@ -79,5 +86,6 @@ WORKERS: tuple[WorkerSpec, ...] = (
             "before it goes out."
         ),
         make_node=english_coach.make_node,
+        produces="polished text",
     ),
 )

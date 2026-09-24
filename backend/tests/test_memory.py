@@ -228,7 +228,12 @@ def test_facts_for_another_owner_are_invisible(tmp_path):
 def test_a_recalled_fact_never_taints_the_chat(tmp_path):
     """Recalled facts only ever came from your own earlier messages (the safety rule above), so
     showing them to the model must never taint the chat (docs/contracts.md § 11): tainting here would
-    warn on every chat that simply remembers something about you."""
+    warn on every chat that simply remembers something about you.
+
+    The message avoids the word "niche" (Phase 9, H1, docs/contracts.md § 13, added it to
+    youtube_researcher's own routing hint): with it, this request would also plan a research step,
+    which taints the chat for an unrelated reason (real tool output) and would no longer isolate
+    memory's own taint rule, which is all this test protects."""
     memory = empty_memory(tmp_path)
     memory.save("niche", "budget desk gear", "seed-thread")
 
@@ -237,7 +242,7 @@ def test_a_recalled_fact_never_taints_the_chat(tmp_path):
         memory=memory, ideas_dir=tmp_path / "ideas",
     )
     with TestClient(app) as client:
-        events = send(client, "Give me more ideas for my niche")
+        events = send(client, "Give me more video ideas")
         thread_id = events[0][1]["thread_id"]
         config = {"configurable": {"thread_id": thread_id}}
         state = client.portal.call(app.state.graph.aget_state, config)

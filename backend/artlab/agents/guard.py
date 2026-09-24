@@ -71,7 +71,12 @@ def make_node(classifier: InjectionClassifier | None = None):
 
         # Passed layer 1. Clear last turn's routing notes and step count either way; the classifier
         # (layer 2) only decides whether `tainted` (and `turn_flagged`, its per-turn twin) is also set.
-        update = {"task": "", "answered_by": "", "steps": 0, "handoff": "", "turn_flagged": False}
+        # `plan`/`artifacts` (Phase 9, docs/contracts.md § 13) are this turn's multi-step plan and the
+        # answers it's produced so far — last turn's must never leak into a new one.
+        update = {
+            "task": "", "answered_by": "", "steps": 0, "handoff": "", "turn_flagged": False,
+            "plan": [], "artifacts": [],
+        }
         detail = result.reason  # today's detail text; the classifier appends its own part to it
 
         if classifier is None:

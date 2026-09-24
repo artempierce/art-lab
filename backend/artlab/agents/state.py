@@ -62,8 +62,15 @@ class ChatState(MessagesState):
                      guard, alongside `tainted`). `remember` reads it to skip extraction on a flagged
                      message — a recalled fact never taints (§ 11), but a message the classifier
                      distrusts still shouldn't become a "memory". Plain overwrite.
+    plan             the remaining steps of a multi-step plan the supervisor decided upfront (Phase 9,
+                     docs/contracts.md § 13) — worker names still to run, in order. Set from the
+                     routing decision's `then` field; popped one at a time as each step finishes.
+                     Plain overwrite; the guard resets it to `[]` at the start of every turn.
+    artifacts        `{kind, agent, text, tainted}` for each plan step finished so far this turn — the
+                     answer each worker produced, handed to the next step as its input
+                     (docs/contracts.md § 13). Plain overwrite; the guard resets it to `[]` too.
 
-    The full contract for these fields: docs/contracts.md §§ 1, 10, 11.
+    The full contract for these fields: docs/contracts.md §§ 1, 10, 11, 13.
     """
 
     spent_usd: Annotated[float, operator.add]
@@ -76,3 +83,5 @@ class ChatState(MessagesState):
     taint_sources: Annotated[list[str], add_unique]
     memory: list[str]
     turn_flagged: bool
+    plan: list[str]
+    artifacts: list[dict]

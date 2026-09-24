@@ -36,12 +36,17 @@ For the user's latest message, decide who should answer it:"""
 PROMPT_FOOTER = """Also rewrite the latest message as a standalone question (resolve words like "it" or "that" from the
 conversation), and give a one-sentence reason for your choice."""
 
-# The circuit breaker: at most this many worker dispatches per turn (one route or handoff each), so
-# two workers handing off to each other can't run forever. docs/contracts.md § 3.
+# The circuit breaker: at most this many worker dispatches per turn (one route, handoff, or planned
+# step each), so two workers handing off to each other — or a runaway plan — can't run forever.
+# docs/contracts.md § 3.
 MAX_STEPS = 5
 
 # What the chat sees when the breaker trips, appended after whatever answer already exists.
 STEP_LIMIT_NOTICE = f"Stopped at the step limit ({MAX_STEPS} steps). The answer above is the best result so far."
+
+# H1 (Phase 9, docs/contracts.md § 13): the most steps one plan may have — `next` plus at most this
+# many more from `then`. Keeps a single routing call from queueing up an unbounded chain of workers.
+MAX_PLAN = 3
 
 
 def _prompt(workers: tuple[WorkerSpec, ...]) -> str:
@@ -53,6 +58,26 @@ def _prompt(workers: tuple[WorkerSpec, ...]) -> str:
 def _answered_by_name(name: str) -> str:
     """How the trace panel names who answered: Arty himself (the `respond` node) or a worker's own name."""
     return "Arty" if name == "respond" else name
+
+
+def _clean_plan(next_worker: str, then: list[str]) -> list[str]:
+    """Turn a `RouteDecision.then` list into the plan for later steps (H1, docs/contracts.md § 13).
+
+    `then` comes straight from the model (or the fake router), so code — not the model — enforces the
+    rules: drop anything that repeats `next` (already the first step) or names "respond" (never a
+    real plan step, single-step or not), drop duplicates keeping the first occurrence, and cap the
+    result at MAX_PLAN - 1 further steps.
+
+    Example: _clean_plan("youtube_researcher", ["youtube_researcher", "respond", "x", "x", "y"]) == ["x", "y"]
+    """
+    cleaned: list[str] = []
+    for name in then:
+        if name == next_worker or name == "respond" or name in cleaned:
+            continue
+        cleaned.append(name)
+        if len(cleaned) == MAX_PLAN - 1:
+            break
+    return cleaned
 
 
 def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
@@ -70,6 +95,20 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
     RouteDecision = pydantic.create_model(
         "RouteDecision",
         next=(Literal[tuple(names)], Field(description=f"Which worker should answer: {', '.join(names)}.")),
+        # H1 (Phase 9, docs/contracts.md § 13): a multi-step request's remaining workers, in order,
+        # each building on the previous one's output. `_clean_plan` (below) is what actually enforces
+        # "at most MAX_PLAN - 1" and drops "respond"/duplicates — this field only shapes what the
+        # model is asked for.
+        then=(
+            list[Literal[tuple(names)]],
+            Field(
+                default_factory=list,
+                description=(
+                    "Further workers to run after `next`, in order, each building on the previous "
+                    "one's output; leave empty for single-step requests."
+                ),
+            ),
+        ),
         reason=(str, Field(description="One short sentence explaining the choice. Shown in the trace panel.")),
         question=(str, Field(description="The user's latest message rewritten as a standalone question.")),
     )
@@ -109,26 +148,31 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
         return fallback, tokens_in, tokens_out
 
     async def supervisor(state: ChatState) -> Command:
-        """Node 2 — decide who answers, follow handoffs, and stop at the step limit.
+        """Node 2 — decide who answers, follow a plan or a handoff, and stop at the step limit.
 
-        Checked in order (docs/contracts.md §§ 3, 10); each dispatch below (routing or a handoff)
-        counts once towards the step limit, and its trace line ends with " · step n/{MAX_STEPS}":
+        Checked in order (docs/contracts.md §§ 3, 10, 13); each dispatch below (routing, a planned
+        step, or a handoff) counts once towards the step limit, and its trace line ends with
+        " · step n/{MAX_STEPS}":
           0. A worker left a data-changing tool call waiting for your Approve/Reject click
              (`pending_approval`, docs/contracts.md § 10): go straight there, before even asking
              whether the turn is "done" — a pending request means it isn't, whatever `answered_by`
              says. No model call, no step counted: this isn't a dispatch, it's a pause.
-          A. A worker answered and isn't asking for another one to continue: finish — but "finish"
-             now means one more stop, `remember` (Phase 7, docs/contracts.md § 11), which decides for
-             itself whether this turn's message taught it anything worth saving. No model call here
-             either way — knowing "we're done" doesn't need an LLM (tenet 1: deterministic code steers
-             the model).
-          B. A worker wants another worker to continue (`handoff`): send it there. An unknown worker
+          A. A worker answered and there's more of this turn's plan left (`plan`, H1, Phase 9,
+             docs/contracts.md § 13): record its answer as an artifact, pop the next step, and
+             dispatch it — no model call; the plan was already decided in full back at step D.
+          B. A worker answered and there's nothing more to do (no plan left, and it isn't asking for
+             another worker to continue): finish — but "finish" now means one more stop, `remember`
+             (Phase 7, docs/contracts.md § 11), which decides for itself whether this turn's message
+             taught it anything worth saving. No model call here either way — knowing "we're done"
+             doesn't need an LLM (tenet 1: deterministic code steers the model).
+          C. A worker wants another worker to continue (`handoff`): send it there. An unknown worker
              name ends the turn with an error instead. If the step limit is already reached, stop
              instead of dispatching.
-          C. Nobody has answered yet this turn: ask the model for a RouteDecision (with the retry-once
-             rule above), then dispatch to that worker. In practice this can never hit the step limit
-             itself — the guard resets `steps` to 0 at the start of every turn, and it's only reached
-             through B afterwards — but the same check guards it for safety.
+          D. Nobody has answered yet this turn: ask the model for a RouteDecision (with the retry-once
+             rule above), then dispatch to `next` and remember `then` as this turn's plan. In practice
+             this can never hit the step limit itself — the guard resets `steps` to 0 at the start of
+             every turn, and it's only reached through A or C afterwards — but the same check guards
+             it for safety.
 
         `Command`'s return type isn't parameterised with a `Literal` of worker names here, because
         that set is only known once `workers` is passed in at graph-build time; graph.py declares the
@@ -143,13 +187,50 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
         if state.get("pending_approval"):
             return Command(goto="approval")
 
-        # A. Done — a worker answered and isn't handing off.
+        # A. A plan is running and there's another step: hand that worker's answer to the next one.
+        plan = state.get("plan") or []
+        if state.get("answered_by") and plan:
+            if steps >= MAX_STEPS:
+                write({
+                    "stage": "arty", "status": "stopped",
+                    "detail": f"stopped · step limit reached ({MAX_STEPS} steps)", "ms": ms_since(start),
+                })
+                return Command(update={"messages": [AIMessage(STEP_LIMIT_NOTICE)]}, goto=END)
+
+            worker = by_name[state["answered_by"]]
+            artifact = {
+                "kind": worker.produces, "agent": worker.name,
+                "text": text_of(state["messages"][-1]), "tainted": state.get("tainted", False),
+            }
+            artifacts = [*state.get("artifacts", []), artifact]
+            next_worker, remaining = plan[0], plan[1:]
+            body = (
+                wrap_untrusted(artifact["text"], f"artifact:{artifact['agent']}")
+                if artifact["tainted"] else artifact["text"]
+            )
+            task = f"{state['task']}\n\nInput from {artifact['agent']} ({artifact['kind']}):\n{body}"
+            step_n = steps + 1
+            plan_step, plan_total = len(artifacts) + 1, len(artifacts) + 1 + len(remaining)
+            write({
+                "stage": "arty", "status": "ok",
+                "detail": f"→ {next_worker} · plan step {plan_step}/{plan_total} · step {step_n}/{MAX_STEPS}",
+                "ms": ms_since(start),
+            })
+            return Command(
+                update={
+                    "task": task, "steps": step_n, "plan": remaining, "artifacts": artifacts,
+                    "answered_by": "", "handoff": "",
+                },
+                goto=next_worker,
+            )
+
+        # B. Done — a worker answered, the plan (if any) is finished, and it isn't handing off.
         if state.get("answered_by") and not state.get("handoff"):
             who = _answered_by_name(state["answered_by"])
             write({"stage": "arty", "status": "ok", "detail": f"done · answered by {who}", "ms": ms_since(start)})
             return Command(goto="remember")
 
-        # B. A handoff to follow.
+        # C. A handoff to follow.
         handoff = state.get("handoff", "")
         if handoff:
             if handoff not in by_name:
@@ -170,7 +251,7 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
             })
             return Command(update={"steps": steps + 1, "answered_by": "", "handoff": ""}, goto=handoff)
 
-        # C. Nobody has answered yet: route (unless the step limit was already reached).
+        # D. Nobody has answered yet: route (unless the step limit was already reached).
         if steps >= MAX_STEPS:
             write({
                 "stage": "arty", "status": "stopped",
@@ -180,13 +261,22 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
 
         decision, tokens_in, tokens_out = await route(state["messages"], state.get("memory", []))
         step_n = steps + 1
+        # H1 (Phase 9, docs/contracts.md § 13): `then` is the model's wish list; `_clean_plan` is what
+        # actually decides the plan code will run.
+        new_plan = _clean_plan(decision.next, decision.then)
         choice = "answering myself" if decision.next == "respond" else f"→ {decision.next}"
+        detail = f"{choice} · {decision.reason} · step {step_n}/{MAX_STEPS}"
+        if new_plan:
+            detail += " · plan: " + " → ".join([decision.next, *new_plan])
         write({
-            "stage": "arty", "status": "ok", "detail": f"{choice} · {decision.reason} · step {step_n}/{MAX_STEPS}",
+            "stage": "arty", "status": "ok", "detail": detail,
             "ms": ms_since(start), "input_tokens": tokens_in, "output_tokens": tokens_out,
         })
         return Command(
-            update={"task": decision.question, "spent_usd": cost_usd(tokens_in, tokens_out), "steps": step_n},
+            update={
+                "task": decision.question, "spent_usd": cost_usd(tokens_in, tokens_out), "steps": step_n,
+                "plan": new_plan,
+            },
             goto=decision.next,
         )
 
