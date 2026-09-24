@@ -4,7 +4,7 @@
 model does each one — so development costs fewer tokens without lowering quality.
 **What to build and in what order** stays in the design book (`docs/design.html`); this plan follows it.
 
-Status: draft, 2026-09-23 · nothing here starts until Sol approves (see "Decisions needed" at the end).
+Status: Wave 0 (W0.4, W0.5) and Wave 1 (T1, T2, T4, T5) done on 2026-09-23 · T3 waiting on W0.2 decision · Phase 5 next (Wave 2 workers).
 
 ---
 
