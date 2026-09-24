@@ -1,0 +1,48 @@
+# Golden evals for the english_coach agent.
+#
+# This agent polishes creator text for grammar, clarity, and tone while preserving voice and intent.
+# Each entry captures a text-editing request and the quality bar for the response.
+#
+# Shape: [{input, checks}]. Input is the text to be polished.
+# Checks are plain-language assertions about what a good response must include.
+#
+# Used by Phase 11 paid evals to grade coach output.
+
+- input: "Fix the grammar: me and him goes to shoot video tomorrow."
+  checks:
+    - Corrects to "He and I are going to shoot a video tomorrow" or equivalent
+    - Uses correct pronoun case (he/I before me/him) and subject-verb agreement (are, not goes)
+    - Keeps the original meaning and casual tone
+    - Lists all changes made with explanations
+
+- input: "Rephrase this to be clearer and more specific: This setup is very good for productivity."
+  checks:
+    - Removes vague words ("very," "good")
+    - Replaces with concrete benefit (e.g., "This setup reduces eye strain and cuts distraction")
+    - Maintains the creator's voice (not overly formal)
+    - Explains why the revision is clearer
+
+- input: "Polish this for a YouTube script: The reason why I bought this monitor is because it has a high refresh rate and I think it makes a huge difference in gaming performance."
+  checks:
+    - Fixes redundant "reason...because" construction
+    - Condenses to shorter, punchier sentences (max 20 words each)
+    - Replaces vague phrases ("huge difference") with specific benefit
+    - Results in something like "I bought this 144Hz monitor because it eliminates motion blur in fast games"
+    - Lists every change
+
+- input: "I need to sound more friendly here: The equipment purchase request was denied due to budgetary constraints."
+  checks:
+    - Rewrites in a warmer, less corporate tone
+    - Keeps the core message (purchase was denied due to budget)
+    - Maintains clarity and accuracy
+    - Example revision: "We can't fund that purchase right now, but let's revisit it next quarter"
+    - Notes how tone shifted without losing meaning
+
+- input: "Can you fix this for grammar and flow? Her and me was testing the new tablet pen, and we finded it to be more comfortable then the old one."
+  checks:
+    - Corrects pronoun case and subject-verb agreement (She and I were testing)
+    - Fixes verb errors (we found, not finded)
+    - Fixes word choice (than, not then)
+    - Improves flow by breaking into shorter, clearer sentences
+    - Preserves the casual, conversational tone
+    - Documents all changes with explanations
