@@ -57,6 +57,7 @@ from artlab.agents.workers import WORKERS
 from artlab.config import DB_PATH, IDEAS_DIR, REPO_ROOT
 from artlab.graph import build_graph
 from artlab.guards.classifier import InjectionClassifier, load_classifier
+from artlab.memory.store import MemoryStore
 from artlab.model import cost_usd, make_model
 from artlab.rag.knowledge import KnowledgeBase
 from artlab.tools.catalog import build_tools
@@ -173,6 +174,7 @@ def create_app(
     knowledge: KnowledgeBase | None = None,
     classifier: InjectionClassifier | None = None,
     ideas_dir: Path | None = None,
+    memory: MemoryStore | None = None,
 ) -> FastAPI:
     """Build the FastAPI app.
 
@@ -186,6 +188,9 @@ def create_app(
                       been downloaded by hand.
         ideas_dir:    where `save_ideas` writes (Phase 6, docs/contracts.md § 10); None means the real
                       data/ideas folder. Tests pass a temp folder so a test run never touches it.
+        memory:       the long-term memory store (Phase 7, docs/contracts.md § 11); None means a real
+                      `MemoryStore()` (opens data/chroma, same as `knowledge`'s default). Tests always
+                      pass a temp store — a test run must never read or write the owner's real memory.
 
     The real server calls this with no arguments except the classifier (see the last line of this
     file). Tests pass a fake model, in-memory chat storage and a temporary knowledge base, so they
@@ -210,7 +215,7 @@ def create_app(
             tools = build_tools(knowledge or KnowledgeBase(), ideas_dir or IDEAS_DIR)
             app.state.checkpointer = saver
             app.state.tools = tools
-            app.state.graph = build_graph(model or make_model(), saver, tools, classifier=classifier)
+            app.state.graph = build_graph(model or make_model(), saver, tools, memory or MemoryStore(), classifier=classifier)
             yield
 
     app = FastAPI(title="Art Lab", lifespan=lifespan)

@@ -55,8 +55,15 @@ class ChatState(MessagesState):
                      "guard classifier" — shown on the approval card so you know what to check before
                      approving. Its reducer is `add_unique` (above): every source is added once, in the
                      order it first appeared, and (like `tainted`) it's never removed.
+    memory           your saved facts (memory/store.py) relevant to this turn, loaded fresh by the
+                     `recall` node and shown to the supervisor and `respond` (docs/contracts.md § 11).
+                     Plain overwrite: each turn's recall replaces the last one, it isn't accumulated.
+    turn_flagged     True when the guard's classifier flagged *this* message (set every turn by the
+                     guard, alongside `tainted`). `remember` reads it to skip extraction on a flagged
+                     message — a recalled fact never taints (§ 11), but a message the classifier
+                     distrusts still shouldn't become a "memory". Plain overwrite.
 
-    The full contract for these fields: docs/contracts.md §§ 1, 10.
+    The full contract for these fields: docs/contracts.md §§ 1, 10, 11.
     """
 
     spent_usd: Annotated[float, operator.add]
@@ -67,3 +74,5 @@ class ChatState(MessagesState):
     tainted: Annotated[bool, operator.or_]
     pending_approval: dict | None
     taint_sources: Annotated[list[str], add_unique]
+    memory: list[str]
+    turn_flagged: bool

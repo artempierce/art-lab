@@ -11,6 +11,7 @@ Contract: docs/contracts.md § 3.
 import asyncio
 from typing import Any
 
+from langchain_core.embeddings import DeterministicFakeEmbedding
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import Field, PrivateAttr
@@ -18,13 +19,21 @@ from pydantic import Field, PrivateAttr
 from artlab.agents.supervisor import STEP_LIMIT_NOTICE
 from artlab.agents.workers import WORKERS, WorkerSpec
 from artlab.graph import build_graph
+from artlab.memory.store import MemoryStore
 from artlab.model import FakeChatModel, fake_model
 from artlab.tools.registry import ToolRegistry
 
 
-def build(model, workers=WORKERS):
+def empty_memory(tmp_path) -> MemoryStore:
+    """A private, temp-folder memory store with instant fake embeddings (Phase 7, M1) — every test
+    graph needs one now that `recall`/`remember` are permanent nodes, and it must never be the real
+    data/chroma store a test run could pollute."""
+    return MemoryStore(tmp_path / "chroma-memory", embeddings=DeterministicFakeEmbedding(size=32))
+
+
+def build(model, tmp_path, workers=WORKERS):
     """A graph with the given model and worker registry, free storage, and no real tools."""
-    return build_graph(model, InMemorySaver(), ToolRegistry(), workers=workers)
+    return build_graph(model, InMemorySaver(), ToolRegistry(), empty_memory(tmp_path), workers=workers)
 
 
 def run(graph, message: str, thread_id: str = "t") -> dict:
@@ -60,7 +69,7 @@ def stub_worker(name: str, calls: list[str], *, handoff: str = "") -> WorkerSpec
     return WorkerSpec(name=name, description=f"stub worker {name}", make_node=lambda model, tools: node)
 
 
-def test_hi_is_answered_by_respond_and_rag_agent_never_runs():
+def test_hi_is_answered_by_respond_and_rag_agent_never_runs(tmp_path):
     """S11: a question with no knowledge-base hint ("hi") is routed to `respond`; `rag_agent` (here a
     spy standing in for it) must never run, and the turn counts as exactly one dispatch. Protects the
     common case: registry + breaker plumbing didn't change simple single-step routing."""
@@ -68,14 +77,14 @@ def test_hi_is_answered_by_respond_and_rag_agent_never_runs():
     respond_spec = next(w for w in WORKERS if w.name == "respond")
     spy_rag = stub_worker("rag_agent", calls)
 
-    state = run(build(fake_model(), workers=(respond_spec, spy_rag)), "hi")
+    state = run(build(fake_model(), tmp_path, workers=(respond_spec, spy_rag)), "hi")
 
     assert calls == []
     assert state["answered_by"] == "respond"
     assert state["steps"] == 1
 
 
-def test_breaker_stops_a_handoff_loop_after_five_dispatches():
+def test_breaker_stops_a_handoff_loop_after_five_dispatches(tmp_path):
     """S7: two stub workers that always hand off to each other never finish on their own. The
     supervisor must stop them at MAX_STEPS (5) dispatches, append the step-limit note, and — because
     a handoff never needs a model call (docs/contracts.md § 3) — only the very first routing decision
@@ -97,14 +106,14 @@ def test_breaker_stops_a_handoff_loop_after_five_dispatches():
     worker_a = stub_worker("A", calls, handoff="B")
     worker_b = stub_worker("B", calls, handoff="A")
 
-    traces, state = run_traced(build(RouteToAOnce(), workers=(worker_a, worker_b)), "go")
+    traces, state = run_traced(build(RouteToAOnce(), tmp_path, workers=(worker_a, worker_b)), "go")
 
     assert calls == ["A", "B", "A", "B", "A"]  # exactly 5 dispatches, then stopped
     assert state["messages"][-1].content == STEP_LIMIT_NOTICE
     assert [t["status"] for t in traces].count("stopped") == 1
 
 
-def test_invalid_routing_output_is_retried_once_and_the_retry_is_used():
+def test_invalid_routing_output_is_retried_once_and_the_retry_is_used(tmp_path):
     """Invalid output once: the router's first reply names a worker that isn't registered, so it
     fails RouteDecision validation (parsed=None); the supervisor asks once more, and the retry's
     (valid) decision is the one actually used — not a fallback."""
@@ -126,7 +135,7 @@ def test_invalid_routing_output_is_retried_once_and_the_retry_is_used():
                 "id": "fake-call", "type": "tool_call",
             }])
 
-    traces, state = run_traced(build(FailsOnceThenRoutes()), "hi")
+    traces, state = run_traced(build(FailsOnceThenRoutes(), tmp_path), "hi")
 
     assert state["answered_by"] == "respond"
     assert state["steps"] == 1
@@ -134,7 +143,7 @@ def test_invalid_routing_output_is_retried_once_and_the_retry_is_used():
     assert "picked on retry" in route_trace["detail"]  # the retry's own reason, not a fallback
 
 
-def test_invalid_routing_output_twice_falls_back_to_respond():
+def test_invalid_routing_output_twice_falls_back_to_respond(tmp_path):
     """Invalid output twice: both routing replies name an unregistered worker, so both fail to
     parse. The supervisor doesn't fail the turn — it falls back to "respond" and says so in the
     trace line (docs/contracts.md § 3)."""
@@ -151,7 +160,7 @@ def test_invalid_routing_output_twice_falls_back_to_respond():
                 "id": "fake-call", "type": "tool_call",
             }])
 
-    traces, state = run_traced(build(AlwaysInvalid()), "hi")
+    traces, state = run_traced(build(AlwaysInvalid(), tmp_path), "hi")
 
     assert state["answered_by"] == "respond"
     route_trace = next(t for t in traces if t["stage"] == "arty" and "step 1/5" in t["detail"])
@@ -159,7 +168,7 @@ def test_invalid_routing_output_twice_falls_back_to_respond():
     assert "invalid" in route_trace["detail"]
 
 
-def test_unknown_handoff_target_ends_the_turn_with_an_error():
+def test_unknown_handoff_target_ends_the_turn_with_an_error(tmp_path):
     """A worker asking to hand off to a name that isn't in the registry is a bug in that worker, not
     a crash: the turn ends at the supervisor with an "error" trace line instead of routing anywhere."""
 
@@ -179,14 +188,14 @@ def test_unknown_handoff_target_ends_the_turn_with_an_error():
                 }])
             return super()._reply(messages)
 
-    traces, state = run_traced(build(RouteToOnlyWorker(), workers=(worker,)), "hi")
+    traces, state = run_traced(build(RouteToOnlyWorker(), tmp_path, workers=(worker,)), "hi")
 
     error_traces = [t for t in traces if t["status"] == "error"]
     assert len(error_traces) == 1 and "ghost" in error_traces[0]["detail"]
     assert state["messages"][-1].content == "done for now"  # the worker's own answer; no notice added
 
 
-def test_routes_come_from_the_registry_not_from_a_fixed_list():
+def test_routes_come_from_the_registry_not_from_a_fixed_list(tmp_path):
     """A worker that isn't one of the two built-ins, added only through `workers=`, must still be a
     valid route (the schema is built from the registry) and its description must appear in the
     supervisor's prompt (so the model actually knows when to pick it) — docs/contracts.md § 3."""
@@ -211,7 +220,7 @@ def test_routes_come_from_the_registry_not_from_a_fixed_list():
             return super()._reply(messages)
 
     model = RouteToExtra()
-    state = run(build(model, workers=(*WORKERS, extra)), "hi")
+    state = run(build(model, tmp_path, workers=(*WORKERS, extra)), "hi")
 
     assert calls == ["extra_worker"]
     assert state["answered_by"] == "extra_worker"

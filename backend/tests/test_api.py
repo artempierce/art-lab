@@ -22,6 +22,7 @@ from artlab.agents.rag_agent import NOT_FOUND
 from artlab.api import create_app
 from artlab.guards import input as input_guard
 from artlab.guards.input import MAX_INPUT_CHARS
+from artlab.memory.store import MemoryStore
 from artlab.model import FakeChatModel, fake_model
 from artlab.rag.ingest import ingest
 from artlab.rag.knowledge import KnowledgeBase
@@ -58,13 +59,23 @@ def empty_kb(tmp_path) -> KnowledgeBase:
     return KnowledgeBase(tmp_path / "chroma", embeddings=DeterministicFakeEmbedding(size=32), min_score=-1)
 
 
+def empty_memory(tmp_path) -> MemoryStore:
+    """A private, temp-folder long-term memory store with instant fake embeddings (Phase 7, M1) — the
+    same shape `empty_kb` gives the knowledge base, so a test run never touches the owner's real
+    memory (data/chroma's "memory" collection)."""
+    return MemoryStore(tmp_path / "chroma-memory", embeddings=DeterministicFakeEmbedding(size=32))
+
+
 @pytest.fixture
 def client(tmp_path):
     """A test client whose fake model answers general questions with "Hello from the fake model."
 
     `with TestClient(app)` runs the app's startup (lifespan) first, which builds the graph.
     """
-    app = create_app(model=fake_model(["Hello from the fake model."]), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path))
+    app = create_app(
+        model=fake_model(["Hello from the fake model."]), checkpointer=InMemorySaver(),
+        knowledge=empty_kb(tmp_path), memory=empty_memory(tmp_path),
+    )
     with TestClient(app) as c:
         yield c
 
@@ -80,30 +91,43 @@ def kb_with_policy(tmp_path):
 
 
 def test_general_question_is_answered_directly(client):
-    """guard → Arty decides to answer himself → Arty answers → Arty is done. Streamed, with cost.
-    (All three Arty lines come from two nodes, `supervisor` and `respond`; the trace names both "arty".)"""
+    """guard → recall → Arty decides to answer himself → Arty answers → Arty is done → remember.
+    Streamed, with cost. (All three Arty lines come from two nodes, `supervisor` and `respond`; the
+    trace names both "arty". The two "memory" lines are recall, then remember — Phase 7,
+    docs/contracts.md § 11: "hi" is under 15 characters, so remember skips with no model call.)"""
     events = send(client, "hi")
 
     assert [name for name, _ in events][0] == "start" and events[-1][0] == "done"
     assert answer(events) == "Hello from the fake model."
-    assert stages(events) == [("guard", "ok"), ("arty", "ok"), ("arty", "ok"), ("arty", "ok")]
+    assert stages(events) == [
+        ("guard", "ok"), ("memory", "ok"), ("arty", "ok"), ("arty", "ok"), ("arty", "ok"), ("memory", "ok"),
+    ]
     traces = [d for n, d in events if n == "trace"]
-    assert traces[1]["detail"].startswith("answering myself") and traces[2]["detail"].startswith("answer · ")
-    assert traces[3]["detail"] == "done · answered by Arty"
+    assert traces[1]["detail"] == "no facts yet"
+    assert traces[2]["detail"].startswith("answering myself") and traces[3]["detail"].startswith("answer · ")
+    assert traces[4]["detail"] == "done · answered by Arty"
+    assert traces[5]["detail"] == "skipped (too short)"
     assert events[-1][1]["cost_usd"] == 0 and events[-1][1]["sources"] == []
 
 
 def test_knowledge_question_goes_to_rag_agent_with_sources(tmp_path, kb_with_policy):
     """A question about our policies: supervisor → rag_agent → search → answer citing [1], with sources
-    in the `done` event and saved in the chat history."""
-    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=kb_with_policy)
+    in the `done` event and saved in the chat history. (Phase 7, docs/contracts.md § 11: recall runs
+    before the supervisor, remember after it's done — this question doesn't say "my X is Y", so
+    remember finds nothing to save.)"""
+    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=kb_with_policy, memory=empty_memory(tmp_path))
     with TestClient(app) as client:
         events = send(client, "What is our sponsorship disclosure rule?")
 
-        assert stages(events) == [("guard", "ok"), ("arty", "ok"), ("tool", "ok"), ("rag_agent", "ok"), ("arty", "ok")]
+        assert stages(events) == [
+            ("guard", "ok"), ("memory", "ok"), ("arty", "ok"), ("tool", "ok"), ("rag_agent", "ok"),
+            ("arty", "ok"), ("memory", "ok"),
+        ]
         traces = [d for n, d in events if n == "trace"]
-        assert traces[1]["detail"].startswith("→ rag_agent") and traces[4]["detail"] == "done · answered by rag_agent"
-        assert traces[2]["detail"].startswith("search_knowledge [read-only] · 1 chunks · 1 files")
+        assert traces[1]["detail"] == "no facts yet"
+        assert traces[2]["detail"].startswith("→ rag_agent") and traces[5]["detail"] == "done · answered by rag_agent"
+        assert traces[3]["detail"].startswith("search_knowledge [read-only] · 1 chunks · 1 files")
+        assert traces[6]["detail"] == "nothing to remember"
         assert "[1]" in answer(events) and "first 30 seconds" in answer(events)
 
         sources = events[-1][1]["sources"]
@@ -118,7 +142,7 @@ def test_a_cited_answer_taints_the_chat_and_it_stays_tainted(tmp_path, kb_with_p
     """Small talk leaves the chat clean. Once rag_agent answers from documents (untrusted text), the chat
     is tainted, and a later small-talk turn doesn't clear it: the documents are still in the history.
     This is what will keep data-changing tools locked in that chat (docs/contracts.md § 1)."""
-    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=kb_with_policy)
+    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=kb_with_policy, memory=empty_memory(tmp_path))
     with TestClient(app) as client:
         thread_id = send(client, "hi")[0][1]["thread_id"]
         config = {"configurable": {"thread_id": thread_id}}
@@ -157,12 +181,15 @@ def test_rag_agent_model_sees_only_the_question_and_wrapped_sources(tmp_path, kb
             return super()._reply(messages)
 
     spy = SpyModel()
-    app = create_app(model=spy, checkpointer=InMemorySaver(), knowledge=kb_with_policy)
+    app = create_app(model=spy, checkpointer=InMemorySaver(), knowledge=kb_with_policy, memory=empty_memory(tmp_path))
     with TestClient(app) as client:
         thread_id = send(client, "hi, remember the word BANANA")[0][1]["thread_id"]
         send(client, "What is our sponsorship disclosure rule?", thread_id)
 
-    rag_prompt = spy.prompts[-1]
+    # Not spy.prompts[-1]: the second turn's `remember` node (Phase 7, docs/contracts.md § 11) also
+    # calls the model, after rag_agent answers, so the very last prompt recorded is its extraction
+    # prompt (just the raw question), not rag_agent's "Question: ...\n\nSources:..." one.
+    rag_prompt = next(p for p in reversed(spy.prompts) if p.startswith("Question:"))
     assert rag_prompt.startswith("Question: What is our sponsorship disclosure rule?")
     assert '<untrusted_retrieval source="' in rag_prompt
     assert "BANANA" not in rag_prompt
@@ -207,7 +234,7 @@ def test_blocked_input_never_reaches_the_model(monkeypatch, tmp_path, message, r
     """
     # For the budget case, set the per-chat budget to $0 so the very first message is over it.
     monkeypatch.setattr(input_guard, "SESSION_BUDGET_USD", 0.0 if rule == "budget" else 0.50)
-    app = create_app(model=NeverCalledModel(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path))
+    app = create_app(model=NeverCalledModel(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path), memory=empty_memory(tmp_path))
     with TestClient(app) as client:
         events = send(client, message)
 

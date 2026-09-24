@@ -28,6 +28,7 @@ const STAGE_COLOR: Record<string, string> = {
   youtube_researcher: 'text-t-research',
   content_ideator: 'text-t-ideas',
   english_coach: 'text-t-coach',
+  memory: 'text-t-memory', // Phase 7: recall, remember and summarize lines
 }
 
 // Status → icon at the start of the line. Unknown statuses get a plain dot.

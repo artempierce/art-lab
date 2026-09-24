@@ -35,7 +35,7 @@ def make_node(classifier: InjectionClassifier | None = None):
                      deterministic path with no classifier at all (docs/contracts.md § 8).
     """
 
-    async def guard(state: ChatState) -> Command[Literal["supervisor", "__end__"]]:
+    async def guard(state: ChatState) -> Command[Literal["summarize", "__end__"]]:
         """Node 1 — run the input guard on the newest message, then either continue or stop.
 
         Steps:
@@ -43,7 +43,12 @@ def make_node(classifier: InjectionClassifier | None = None):
              never runs on a message layer 1 already blocked.
           2. if layer 1 passed and we have a classifier, score the message. A high score, or the
              classifier raising, taints the chat instead of blocking it (fail-safe: an error must
-             never be read as "trusted") but lets the run continue to the supervisor either way.
+             never be read as "trusted") but lets the run continue either way — on to `recall`
+             (Phase 7, docs/contracts.md § 11), never straight to the supervisor any more.
+
+        `turn_flagged` records the classifier's verdict for this turn alone (unlike `tainted`, which
+        stays true for the whole chat): `remember` reads it to skip extracting a memory from a message
+        the classifier didn't trust.
 
         Returns a `Command`, which does two jobs in one return value: `update` changes the state, and
         `goto` picks the next node. The `Literal[...]` type tells LangGraph (and graph drawings) which
@@ -65,8 +70,8 @@ def make_node(classifier: InjectionClassifier | None = None):
             return Command(update={"messages": [RemoveMessage(id=message.id), refusal], "answered_by": ""}, goto=END)
 
         # Passed layer 1. Clear last turn's routing notes and step count either way; the classifier
-        # (layer 2) only decides whether `tainted` is also set below.
-        update = {"task": "", "answered_by": "", "steps": 0, "handoff": ""}
+        # (layer 2) only decides whether `tainted` (and `turn_flagged`, its per-turn twin) is also set.
+        update = {"task": "", "answered_by": "", "steps": 0, "handoff": "", "turn_flagged": False}
         detail = result.reason  # today's detail text; the classifier appends its own part to it
 
         if classifier is None:
@@ -80,16 +85,22 @@ def make_node(classifier: InjectionClassifier | None = None):
                 write({"stage": "guard", "status": "flagged", "detail": detail, "ms": ms_since(start)})
                 # "guard classifier" (docs/contracts.md § 10) is the source name a later approval card
                 # shows, so you know a flagged message — not a tool result — is why it's asking.
-                return Command(update={**update, "tainted": True, "taint_sources": ["guard classifier"]}, goto="supervisor")
+                return Command(
+                    update={**update, "tainted": True, "taint_sources": ["guard classifier"], "turn_flagged": True},
+                    goto="summarize",
+                )
 
             if score >= THRESHOLD:
                 detail += f" · classifier {score:.2f} ≥ {THRESHOLD:.2f} → chat tainted, data-changing tools locked"
                 write({"stage": "guard", "status": "flagged", "detail": detail, "ms": ms_since(start)})
-                return Command(update={**update, "tainted": True, "taint_sources": ["guard classifier"]}, goto="supervisor")
+                return Command(
+                    update={**update, "tainted": True, "taint_sources": ["guard classifier"], "turn_flagged": True},
+                    goto="summarize",
+                )
 
             detail += f" · classifier {score:.2f}"
 
         write({"stage": "guard", "status": "ok", "detail": detail, "ms": ms_since(start)})
-        return Command(update=update, goto="supervisor")
+        return Command(update=update, goto="summarize")
 
     return guard

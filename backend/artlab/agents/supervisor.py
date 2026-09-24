@@ -1,11 +1,13 @@
 """
 agents/supervisor.py — node 2 of the graph: Arty, the main agent (v2, T1 Phase 3).
 
-Runs after the guard on every turn. Its job is to decide who answers a new message (a worker from
-the registry in `agents/workers.py`), to notice once a worker has answered so the turn can finish,
-to follow a worker's request that another worker continue (a "handoff"), and to stop the turn if
-that keeps happening too long (the step-limit circuit breaker). It's the only node that asks the
-model to fill in structured output (`RouteDecision`). Contract: docs/contracts.md § 3.
+Runs after the guard and `recall` on every turn. Its job is to decide who answers a new message (a
+worker from the registry in `agents/workers.py`), to notice once a worker has answered so the turn can
+finish (which now means handing off to `remember`, Phase 7, docs/contracts.md § 11, instead of ending
+outright), to follow a worker's request that another worker continue (a "handoff"), and to stop the
+turn if that keeps happening too long (the step-limit circuit breaker). It's the only node that asks
+the model to fill in structured output (`RouteDecision`), and — when you have any saved facts — the
+only place besides `respond` that shows them to the model. Contract: docs/contracts.md § 3.
 """
 
 import time
@@ -23,6 +25,7 @@ from artlab.agents.common import ms_since, text_of, tokens_used
 from artlab.agents.state import ChatState
 from artlab.agents.workers import WorkerSpec
 from artlab.model import cost_usd
+from artlab.tools.untrusted import wrap_untrusted
 
 # ── Prompt ─────────────────────────────────────────────────────────────────────────────────────────
 # Sent to the model on each call, never stored in the chat history, so it can change any time without
@@ -73,18 +76,27 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
     router = model.with_structured_output(RouteDecision, include_raw=True)
     prompt = _prompt(workers)
 
-    async def route(messages: list) -> tuple[object, int, int]:
+    async def route(messages: list, memory: list[str]) -> tuple[object, int, int]:
         """Ask the model for a RouteDecision, retrying once if the output doesn't parse.
 
         If it's still invalid after the retry, fall back to "respond" instead of failing the turn —
         the fallback's own `reason` says so, which lands in the trace line the caller writes.
         Returns (decision, input_tokens, output_tokens), counting BOTH calls when it retried: an
         invalid answer is still billed, so it must count towards the cost and the chat's budget.
+
+        `memory` (docs/contracts.md § 11): your saved facts, if any, sent as one extra system message
+        right after the main prompt, wrapped as untrusted — recalled facts are data, never
+        instructions, even though they came from your own earlier messages (see the file the contract
+        section explains why: a fact never taints the chat, but it's still never treated as a command).
         """
-        out = await router.ainvoke([SystemMessage(prompt), *messages])
+        system = [SystemMessage(prompt)]
+        if memory:
+            system.append(SystemMessage(wrap_untrusted("\n".join(memory), "memory")))
+
+        out = await router.ainvoke([*system, *messages])
         tokens_in, tokens_out = tokens_used(out["raw"])
         if out["parsed"] is None:
-            out = await router.ainvoke([SystemMessage(prompt), *messages])  # one retry (§ 3)
+            out = await router.ainvoke([*system, *messages])  # one retry (§ 3)
             retry_in, retry_out = tokens_used(out["raw"])
             tokens_in, tokens_out = tokens_in + retry_in, tokens_out + retry_out
         if out["parsed"] is not None:
@@ -105,8 +117,11 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
              (`pending_approval`, docs/contracts.md § 10): go straight there, before even asking
              whether the turn is "done" — a pending request means it isn't, whatever `answered_by`
              says. No model call, no step counted: this isn't a dispatch, it's a pause.
-          A. A worker answered and isn't asking for another one to continue: finish. No model call —
-             knowing "we're done" doesn't need an LLM (tenet 1: deterministic code steers the model).
+          A. A worker answered and isn't asking for another one to continue: finish — but "finish"
+             now means one more stop, `remember` (Phase 7, docs/contracts.md § 11), which decides for
+             itself whether this turn's message taught it anything worth saving. No model call here
+             either way — knowing "we're done" doesn't need an LLM (tenet 1: deterministic code steers
+             the model).
           B. A worker wants another worker to continue (`handoff`): send it there. An unknown worker
              name ends the turn with an error instead. If the step limit is already reached, stop
              instead of dispatching.
@@ -132,7 +147,7 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
         if state.get("answered_by") and not state.get("handoff"):
             who = _answered_by_name(state["answered_by"])
             write({"stage": "arty", "status": "ok", "detail": f"done · answered by {who}", "ms": ms_since(start)})
-            return Command(goto=END)
+            return Command(goto="remember")
 
         # B. A handoff to follow.
         handoff = state.get("handoff", "")
@@ -163,7 +178,7 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
             })
             return Command(update={"messages": [AIMessage(STEP_LIMIT_NOTICE)]}, goto=END)
 
-        decision, tokens_in, tokens_out = await route(state["messages"])
+        decision, tokens_in, tokens_out = await route(state["messages"], state.get("memory", []))
         step_n = steps + 1
         choice = "answering myself" if decision.next == "respond" else f"→ {decision.next}"
         write({

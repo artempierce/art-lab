@@ -16,6 +16,7 @@ from artlab.agents.common import ms_since, tokens_used
 from artlab.agents.state import ChatState
 from artlab.model import cost_usd, model_name
 from artlab.tools.registry import ToolRegistry
+from artlab.tools.untrusted import wrap_untrusted
 
 RESPOND_PROMPT = """You are Arty, Art Lab's assistant for a YouTube creator's studio: a cheerful little retro computer
 who loves art and good ideas. Be warm, practical and concise."""
@@ -51,8 +52,10 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
         """Node 3a — answer directly, from the conversation so far.
 
         Steps:
-          1. Send the system prompt (the respond prompt plus the team text above) and the whole chat
-             history to the model.
+          1. Send the system prompt (the respond prompt plus the team text above), your saved facts if
+             you have any (Phase 7, docs/contracts.md § 11 — one more system message, right after the
+             main prompt, wrapped as untrusted the same way rag_agent's sources are), and the whole
+             chat history to the model.
           2. Write a trace line: model name, tokens in/out, time taken.
           3. Return the reply (appended to messages), its cost, and `answered_by` so the supervisor finishes.
 
@@ -63,7 +66,12 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
         start = time.perf_counter()
         write = get_stream_writer()
 
-        reply = await model.ainvoke([SystemMessage(system_prompt), *state["messages"]])
+        system = [SystemMessage(system_prompt)]
+        memory = state.get("memory", [])
+        if memory:
+            system.append(SystemMessage(wrap_untrusted("\n".join(memory), "memory")))
+
+        reply = await model.ainvoke([*system, *state["messages"]])
 
         tokens_in, tokens_out = tokens_used(reply)
         write({
