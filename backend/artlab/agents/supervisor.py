@@ -99,8 +99,12 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
     async def supervisor(state: ChatState) -> Command:
         """Node 2 — decide who answers, follow handoffs, and stop at the step limit.
 
-        Checked in order (docs/contracts.md § 3); each dispatch below (routing or a handoff) counts
-        once towards the step limit, and its trace line ends with " · step n/{MAX_STEPS}":
+        Checked in order (docs/contracts.md §§ 3, 10); each dispatch below (routing or a handoff)
+        counts once towards the step limit, and its trace line ends with " · step n/{MAX_STEPS}":
+          0. A worker left a data-changing tool call waiting for your Approve/Reject click
+             (`pending_approval`, docs/contracts.md § 10): go straight there, before even asking
+             whether the turn is "done" — a pending request means it isn't, whatever `answered_by`
+             says. No model call, no step counted: this isn't a dispatch, it's a pause.
           A. A worker answered and isn't asking for another one to continue: finish. No model call —
              knowing "we're done" doesn't need an LLM (tenet 1: deterministic code steers the model).
           B. A worker wants another worker to continue (`handoff`): send it there. An unknown worker
@@ -119,6 +123,10 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
         start = time.perf_counter()
         write = get_stream_writer()
         steps = state.get("steps", 0)
+
+        # 0. A tool is waiting for your click. Go there before anything else.
+        if state.get("pending_approval"):
+            return Command(goto="approval")
 
         # A. Done — a worker answered and isn't handing off.
         if state.get("answered_by") and not state.get("handoff"):

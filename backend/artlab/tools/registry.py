@@ -9,10 +9,9 @@ Tenet 2 there: a model only *asks* for an action; our code decides whether it ha
 
     1. check    the tool exists
                 the calling agent is on the tool's allow-list        e.g. search_knowledge: rag_agent only
-                the tool is read-only                                tools that change data ("mutating") need
-                                                                     your Approve/Reject click (Phase 6); until
-                                                                     then they are refused outright, and in a
-                                                                     tainted chat they always will be
+                the tool is read-only                                tools that change data ("mutating") always
+                                                                     need your Approve/Reject click (Phase 6,
+                                                                     docs/contracts.md § 10) before they run
     2. run      the tool, in a worker thread, with a per-tool timeout; any exception or timeout from the
                 tool gets one retry, and a second failure comes back as a failed `ToolResult` instead of
                 raising
@@ -51,6 +50,13 @@ Tier = Literal["read_only", "mutating"]
 
 class ToolDenied(PermissionError):
     """The registry refused a tool call. The message says why, in words an agent (or you) can act on."""
+
+
+class ApprovalRequired(ToolDenied):
+    """A mutating tool was requested, but nothing runs until you click Approve (Phase 6,
+    docs/contracts.md § 10). It's a `ToolDenied` — the model's request is refused the same as any other
+    — but the tool loop (agents/tool_loop.py) catches this one specifically and turns it into an
+    approval card instead of a plain "refused" message."""
 
 
 @dataclass(frozen=True)
@@ -172,7 +178,11 @@ class ToolRegistry:
     def check(self, agent: str, name: str, tainted: bool = False) -> Tool:
         """Step 1: return the tool if `agent` may run it now, else raise ToolDenied saying why.
 
-        A refusal is a decision, not a failure: it is never retried.
+        A refusal is a decision, not a failure: it is never retried. From Phase 6 (docs/contracts.md
+        § 10), a mutating tool always raises the more specific `ApprovalRequired` — tainted or not: the
+        owner's Approve/Reject click is now what the lethal-trifecta rule (docs/execution-plan.md § 4a)
+        asks for, not an outright refusal. `tainted` is kept as a parameter (still used by `call`'s
+        caller, the tool loop) even though this check no longer branches on it.
         """
         tool = self._tools.get(name)
         if tool is None:
@@ -180,11 +190,7 @@ class ToolRegistry:
         if agent not in tool.allowed_agents:
             raise ToolDenied(f"{agent} may not use {name} (allowed: {', '.join(sorted(tool.allowed_agents))})")
         if tool.tier == "mutating":
-            if tainted:
-                # The lethal-trifecta rule (docs/execution-plan.md § 4a): once outside text is in the chat,
-                # nothing may change or send data, whatever the model asks.
-                raise ToolDenied(f"{name} changes data, and this chat has read untrusted content, so it is refused")
-            raise ToolDenied(f"{name} changes data and needs your approval, which arrives in Phase 6")
+            raise ApprovalRequired(f"{name} changes data and needs your approval")
         return tool
 
     def tools_for(self, agent: str) -> list[Tool]:
@@ -226,29 +232,18 @@ class ToolRegistry:
             specs.append(spec)
         return specs
 
-    async def call(self, agent: str, name: str, *, tainted: bool = False, **args: Any) -> ToolResult:
-        """Run tool `name` on behalf of `agent` (steps 1–5 in the file header).
-
-        Args:
-            agent:    the calling agent's name, checked against the tool's allow-list
-            name:     the tool to run
-            tainted:  the chat's `tainted` flag; a tainted chat can't run mutating tools
-            **args:   the tool's own arguments
-
-        Raises ToolDenied if the checks fail — a refusal is a decision, not a failure, so it is never
-        retried (see `check`). Anything the tool itself raises, or a timeout, gets one retry (T2); if
-        the second try also fails, this returns a failed `ToolResult` instead of raising. Example:
-            result = await tools.call("rag_agent", "search_knowledge", query="sponsor rules")
-            result.data.hits   → the hits, for our code        result.text → wrapped, for the model
+    async def _run(self, name: str, tool: Tool, args: dict[str, Any]) -> ToolResult:
+        """Steps 2–5 of the file header (run with retry, render, scan, wrap), once the caller has
+        already decided the call may happen. Shared by `call` (a model's request, checked by `check`)
+        and `run_approved` (your own Approve click, re-checked separately) so a mutating tool runs
+        through exactly the same timeout/retry/wrapping as any other — approval only changes *whether*
+        it runs, never *how*.
         """
-        # 1. Check.
-        tool = self.check(agent, name, tainted)
-
-        # 2. Run, with one retry (T2). `asyncio.to_thread` runs the blocking function in a worker
-        #    thread, so the server stays free for other requests meanwhile (the knowledge search, for
-        #    one, briefly uses the CPU). `asyncio.wait_for` gives up waiting after `timeout_s` — but the
-        #    thread itself keeps running in the background; Python has no way to kill it. We just stop
-        #    waiting for it and move on, which is safe here because tools don't touch shared state.
+        # Run, with one retry (T2). `asyncio.to_thread` runs the blocking function in a worker
+        # thread, so the server stays free for other requests meanwhile (the knowledge search, for
+        # one, briefly uses the CPU). `asyncio.wait_for` gives up waiting after `timeout_s` — but the
+        # thread itself keeps running in the background; Python has no way to kill it. We just stop
+        # waiting for it and move on, which is safe here because tools don't touch shared state.
         error: str | None = None
         for attempt in (1, 2):
             try:
@@ -280,3 +275,44 @@ class ToolRegistry:
             tool=name, ok=False, data=None, text=text, untrusted=tool.untrusted_output,
             error=error, attempts=2,
         )
+
+    async def call(self, agent: str, name: str, *, tainted: bool = False, **args: Any) -> ToolResult:
+        """Run tool `name` on behalf of `agent` (steps 1–5 in the file header).
+
+        Args:
+            agent:    the calling agent's name, checked against the tool's allow-list
+            name:     the tool to run
+            tainted:  the chat's `tainted` flag, passed through to `check` (see its docstring)
+            **args:   the tool's own arguments
+
+        Raises ToolDenied (or its subclass ApprovalRequired, for a mutating tool) if the checks fail —
+        a refusal is a decision, not a failure, so it is never retried (see `check`). Anything the tool
+        itself raises, or a timeout, gets one retry (T2); if the second try also fails, this returns a
+        failed `ToolResult` instead of raising. Example:
+            result = await tools.call("rag_agent", "search_knowledge", query="sponsor rules")
+            result.data.hits   → the hits, for our code        result.text → wrapped, for the model
+        """
+        # 1. Check.
+        tool = self.check(agent, name, tainted)
+        return await self._run(name, tool, args)
+
+    async def run_approved(self, agent: str, name: str, args: dict[str, Any]) -> ToolResult:
+        """Run a mutating tool for real, after your Approve click (Phase 6, docs/contracts.md § 10).
+
+        This is the *only* way a mutating tool ever runs: `check` (used by `call`, which is what a
+        model's request goes through) always refuses one with `ApprovalRequired`, and this method isn't
+        offered to any model as a tool (`specs_for` only lists what `tools_for` returns, straight from
+        the registry — this is a plain method, not a registered tool). Only the approval graph node
+        calls it, using the exact `args` it recorded when the model first asked, never asking the model
+        again.
+
+        Still re-checks the allow-list (unknown tool, or `agent` not on it) — the request could in
+        principle be stale — but never re-raises `ApprovalRequired`: the whole point of this method is
+        that the approval has already happened.
+        """
+        tool = self._tools.get(name)
+        if tool is None:
+            raise ToolDenied(f"unknown tool {name!r}")
+        if agent not in tool.allowed_agents:
+            raise ToolDenied(f"{agent} may not use {name} (allowed: {', '.join(sorted(tool.allowed_agents))})")
+        return await self._run(name, tool, args)

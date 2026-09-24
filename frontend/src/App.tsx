@@ -17,6 +17,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import {
+  type Approval,
   type ChatEvent,
   type Message,
   type RunSummary,
@@ -24,6 +25,7 @@ import {
   type TraceLine,
   getThread,
   listThreads,
+  resumeChat,
   streamChat,
 } from './api'
 import type { ArtyMood } from './components/Arty'
@@ -118,24 +120,27 @@ export default function App() {
   }
 
   /**
-   * Send a message and stream the answer in.
+   * Run one streamed exchange (either a new message, or an approval's continuation): add an empty
+   * assistant bubble, start a new trace-panel block under `prompt`, and stream `run`'s events into
+   * them. Shared by send() and respondToApproval() below, so both a sent message and a resumed
+   * approval fill the page the same way.
    *
-   * 1. Add your bubble plus an empty assistant bubble (it fills up as tokens arrive).
+   * 1. Add an empty assistant bubble; it fills up as tokens arrive.
    * 2. Start a new trace-panel block for this run, under this chat's runsByThread key.
    * 3. Stream the response; each event updates the bubble or the trace block (see onEvent). A
    *    new chat's key is NEW_CHAT_KEY until `start` reports its real thread ID; from then on its
    *    runs live under that ID instead, so they're still there if you switch away and back.
    * 4. When the stream ends, re-enable sending and refresh the sidebar (a new chat now has a title).
    */
-  async function send(text: string) {
+  async function runStream(prompt: string, run: (onEvent: (event: ChatEvent) => void) => Promise<void>) {
     setBusy(true)
-    setMessages((ms) => [...ms, { role: 'user', content: text }, { role: 'assistant', content: '' }])
+    setMessages((ms) => [...ms, { role: 'assistant', content: '' }])
 
     // `key` is captured here and only changes below, when a new chat's `start` event arrives — it
     // isn't re-read from `threadId`, so streaming keeps writing to the chat that sent the message
     // even as `threadId` moves on. (Switching chats mid-stream is already blocked by `busy`.)
     let key = threadId ?? NEW_CHAT_KEY
-    setRunsByThread((rs) => ({ ...rs, [key]: [...(rs[key] ?? []), { traceId: '', prompt: text, lines: [] }] }))
+    setRunsByThread((rs) => ({ ...rs, [key]: [...(rs[key] ?? []), { traceId: '', prompt, lines: [] }] }))
 
     // What each server event does to the page.
     const onEvent = (e: ChatEvent) => {
@@ -159,6 +164,15 @@ export default function App() {
         case 'token':
           updateReply((m) => ({ ...m, content: m.content + e.text }))
           break
+        case 'approval':
+          // A mutating tool is waiting for a click: attach the request to this reply so ChatView
+          // can show its ApprovalCard (P6b). The reply's text so far is already the "waiting for
+          // your approval" message the backend sent as tokens.
+          updateReply((m) => ({
+            ...m,
+            approval: { id: e.id, agent: e.agent, tool: e.tool, args: e.args, tainted: e.tainted, taint_sources: e.taint_sources },
+          }))
+          break
         case 'done':
           // The totals go to the trace panel; the sources (if rag_agent answered) go under the reply.
           updateLastRun(key, (r) => ({ ...r, summary: e }))
@@ -171,9 +185,9 @@ export default function App() {
     }
 
     try {
-      await streamChat(text, threadId, onEvent)
+      await run(onEvent)
     } catch {
-      // streamChat only throws when the backend can't be reached at all.
+      // streamChat/resumeChat only throw when the backend can't be reached at all.
       showError(key, BACKEND_DOWN)
     } finally {
       setBusy(false)
@@ -181,9 +195,32 @@ export default function App() {
     }
   }
 
+  /** Send a message: add your bubble, then stream the answer in via runStream. */
+  async function send(text: string) {
+    setMessages((ms) => [...ms, { role: 'user', content: text }])
+    await runStream(text, (onEvent) => streamChat(text, threadId, onEvent))
+  }
+
+  /**
+   * Approve or reject a pending tool call: mark the card's own outcome (so it disables and shows
+   * what happened), then stream the continuation into a new assistant bubble and a new trace-panel
+   * run via runStream — labelled e.g. "✓ approved save_ideas" so it's clear in the trace panel what
+   * kicked the run off, since there's no new user message for this one.
+   */
+  async function respondToApproval(approval: Approval, approve: boolean) {
+    if (!threadId) return // an approval always belongs to a saved chat, so this can't happen
+    setMessages((ms) =>
+      ms.map((m) => (m.approval?.id === approval.id ? { ...m, approvalDecision: approve ? 'approved' : 'rejected' } : m)),
+    )
+    const prompt = `${approve ? '✓ approved' : '✕ rejected'} ${approval.tool}`
+    await runStream(prompt, (onEvent) => resumeChat(threadId, approval.id, approve, onEvent))
+  }
+
   /**
    * Open a chat from the sidebar: load its history. Its trace-panel runs are whatever this
    * session already has for it in runsByThread (empty if none were made yet) — nothing to clear.
+   * History never includes a pending approval (the backend only sends that event on a live
+   * stream), so a reloaded chat never shows a stale ApprovalCard.
    */
   function openThread(id: string) {
     if (busy || id === threadId) return
@@ -212,7 +249,14 @@ export default function App() {
   return (
     <div className="grid h-full grid-cols-1 lg:grid-cols-[270px_minmax(0,1fr)_380px]">
       <Sidebar threads={threads} error={threadsError} activeId={threadId} onOpen={openThread} onNew={newChat} />
-      <ChatView title={title} messages={messages} busy={busy} mood={mood} onSend={send} />
+      <ChatView
+        title={title}
+        messages={messages}
+        busy={busy}
+        mood={mood}
+        onSend={send}
+        onRespondApproval={respondToApproval}
+      />
       <TracePanel runs={runs} busy={busy} />
     </div>
   )

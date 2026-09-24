@@ -73,9 +73,17 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
              the reducer's `operator.or_` never turns an untainted chat tainted for no reason.
         """
         r = await run_tool_loop(
-            model, tools, NAME, PROMPT, state["task"], tainted_in=state.get("tainted", False),
+            model, tools, NAME, PROMPT, state["task"],
+            tainted_in=state.get("tainted", False), taint_sources_in=state.get("taint_sources", []),
         )
         update = {"messages": [r.reply], "spent_usd": r.spent_usd, "answered_by": NAME}
-        return update | ({"tainted": True} if r.tainted else {})
+        if r.pending:  # no mutating tool is allowed here today, but the loop's contract is the same for every worker
+            update["pending_approval"] = r.pending
+        if r.tainted:
+            # Say *where* the untrusted content came from (e.g. "fetch_comments"), so a later
+            # Approve / Reject card in this chat can name it (docs/contracts.md § 10).
+            update["tainted"] = True
+            update["taint_sources"] = r.taint_sources
+        return update
 
     return youtube_researcher

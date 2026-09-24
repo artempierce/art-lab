@@ -34,14 +34,16 @@ searching the knowledge base, blocked, or happy (with a wink).
 | `backend/artlab/guards/` | Guard layer 1 (`input.py`: size, injection rules (including "disable-safety" regex block), per-chat budget; the injection rules also scan documents) and layer 2 (`classifier.py`: a local ONNX prompt-injection classifier — "reduce privileges", not block) |
 | `backend/artlab/model.py` | Real Claude (`claude-haiku-4-5`) or a free fake model; prices and cost formula |
 | `backend/artlab/rag/` | Knowledge base: `ingest.py` (files + web pages → chunks), `web.py` (safe fetch), `embeddings.py` (local, free), `knowledge.py` (Chroma + search) |
-| `backend/artlab/tools/` | Registry (who may call what), tool gateway with per-tool timeout and retry, untrusted wrapper, stub tools, catalog |
+| `backend/artlab/tools/` | Registry (who may call what), tool gateway with per-tool timeout and retry, untrusted wrapper, stub tools, catalog; `save_ideas` (mutating tool, needs approval); `ideas.py` data writer |
+| `backend/artlab/graph.py` → `approval` node | Approval gate: pauses the run (`interrupt()`) on a recorded data-changing request, and after your click runs exactly the stored arguments |
 | `backend/artlab/config.py` | Where things live on disk |
 | `backend/skills/` | SKILL.md files for phases 5+: retention-analysis, hook-formulas, style-guide |
 | `knowledge/` | Sample documents to search: 6 fictional studio policies + a poisoned test note |
 | `evals/` | Golden question sets: routing, rag, youtube_researcher, content_ideator, english_coach; eval runners |
-| `backend/tests/` | 115 tests on the fake model and local embeddings — no API calls, $0 |
+| `backend/tests/` | 180 tests on the fake model and local embeddings — no API calls, $0 |
 | `frontend/src/` | React app: chat list, chat (with Sources), live trace panel |
 | `frontend/src/components/Arty.tsx` | Arty, drawn as an SVG with five moods (idle, thinking, searching, happy, blocked) |
+| `frontend/src/components/ApprovalCard.tsx` | Phase 6: Approve / Reject card for mutating tools; shows taint warning and what the tool will do |
 | `frontend/src/components/TeamList.tsx` | Phase 5 sidebar section listing available workers (team agents) |
 | `.env.example` | Settings template: API keys, LangSmith, fake-model switch |
 
@@ -58,6 +60,7 @@ What happens when you ask *"Who needs to approve a $900 equipment purchase?"*:
 5. **`agents/guard.py`** runs **`check_input()`**: size → injection rules → budget. Blocked? A refusal, the run ends, no model is called. Passed? The local injection **classifier** (`guards/classifier.py`, if it's been downloaded) scores the message; at or above threshold, the chat is marked **tainted** — the message still gets answered, but data-changing tools are refused in this chat from then on.
 6. **`agents/supervisor.py`** — **Arty**, the *main agent* — asks the model for a **`RouteDecision`**: a worker (e.g. `rag_agent`, `youtube_researcher`, `content_ideator`, `english_coach`) or direct `respond`, with a reason and the question rewritten to stand alone. The route comes from the **worker registry** in `agents/workers.py`. Step counting starts (max 5 steps).
 7. The chosen **worker** calls **`agents/tool_loop.py`** if it needs tools. The tool loop lets the model pick from its allowed tools (max 3 requests per turn, including refused requests), runs each through the **tool gateway** in `tools/registry.py` (which wraps results as untrusted), and finishes with a forced text answer.
+7b. **For data-changing tools** (e.g. `save_ideas`): the gateway refuses to run it directly (`ApprovalRequired`); the worker records the request as `pending_approval`, and the **`approval` node** pauses the run with LangGraph's `interrupt()`. The browser gets an `approval` event and shows a card (with a warning if the chat is tainted); your click calls `POST /api/chat/resume`, and only then does the tool run, with exactly the arguments you saw.
 8. Example: **`agents/rag_agent.py`** calls the tool loop to **`search_knowledge`** (only rag_agent may). Search embeds the question locally, asks Chroma for the closest chunks, drops weak matches and flagged chunks, and returns the top 4 — each **wrapped as untrusted** by the gateway. If the first search finds nothing, rag_agent can rephrase and search again (max 2 searches).
 9. The worker answers from the tool results; nothing relevant → "I couldn't find that in the knowledge base", with no model call. The sources are attached to the reply.
 10. Back at the **supervisor**: someone answered and step count increments, or the agent hands back an artifact for the next worker. Handoffs and step limits are managed here. When done, the supervisor finishes.
@@ -157,7 +160,8 @@ Each phase ends **working, visible in the trace panel, tested, and documented**.
 | 3 | Supervisor v2: worker registry, more routes, step limit circuit breaker | ✅ done |
 | 4 | Tool gateway: per-tool timeout, retries, failure handling, stub tools, taint tracking | ✅ done |
 | 5 | **Worker agents phase 1**: youtube_researcher (query_youtube_trends, fetch_comments), content_ideator (3 ideas with hooks), english_coach (polish); tool loop (model-driven, max 3 per turn); capabilities registry (GET /api/agents, TeamList sidebar); trace panel keeps runs while switching chats | ✅ done |
-| 6–13 | Approval, memory, skills, handoffs, caps, evals, dashboards | planned |
+| 6 | **Approval gate**: data-changing tools pause the graph and show Approve / Reject; tainted chats ask with a warning instead of refusing | ✅ done |
+| 7–13 | Memory, skills, handoffs, caps, evals, dashboards | planned |
 
 ---
 

@@ -170,6 +170,11 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
         # The sources were outside text and the answer is built from them, so the chat is now tainted
         # (docs/contracts.md § 1). The "not found" and failed-search paths above never showed anything
         # from outside to a model, so they don't taint.
-        return {"messages": [reply], "spent_usd": spent, "answered_by": "rag_agent", "tainted": found.untrusted}
+        update = {"messages": [reply], "spent_usd": spent, "answered_by": "rag_agent", "tainted": found.untrusted}
+        if found.untrusted:
+            # Phase 6 (docs/contracts.md § 10): recorded so a later approval card can say what tainted
+            # the chat, e.g. "this chat read untrusted content (search_knowledge)".
+            update["taint_sources"] = ["search_knowledge"]
+        return update
 
     return rag_agent
