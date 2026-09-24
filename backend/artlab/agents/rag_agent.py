@@ -6,7 +6,6 @@ processes, checklists, requirements or documents. It searches the knowledge base
 registry, then answers using only what it found, citing sources — never outside knowledge.
 """
 
-import asyncio
 import re
 import time
 
@@ -52,10 +51,11 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
         """
         write = get_stream_writer()
 
-        # 1. The search is plain Python that briefly uses the CPU (embedding + Chroma), so it runs in a
-        #    worker thread (`asyncio.to_thread`) to keep the server free for other requests meanwhile.
+        # 1. Search through the gateway. `found.data` is the SearchResult (hits, for our code);
+        #    `found.text` is the same hits numbered and wrapped as untrusted (for the model).
         start = time.perf_counter()
-        result: SearchResult = await asyncio.to_thread(tools.call, "rag_agent", "search_knowledge", query=state["task"])
+        found = await tools.call("rag_agent", "search_knowledge", tainted=state.get("tainted", False), query=state["task"])
+        result: SearchResult = found.data
 
         # 2. What the search found.
         files = len({hit.source for hit in result.hits})
@@ -73,7 +73,7 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
 
         # 4. Answer from the sources only.
         start = time.perf_counter()
-        prompt = f"Question: {state['task']}\n\nSources:\n\n{result.as_context()}"
+        prompt = f"Question: {state['task']}\n\nSources:\n\n{found.text}"
         reply = await model.ainvoke([SystemMessage(RAG_PROMPT), HumanMessage(prompt)])
 
         # 5. Keep the sources with the answer, and report which ones it cited.
@@ -85,6 +85,8 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
             "detail": f"{model_name(model)} · {tokens_in} in / {tokens_out} out · cites {' '.join(f'[{n}]' for n in cited) or 'nothing'}",
             "ms": ms_since(start), "input_tokens": tokens_in, "output_tokens": tokens_out,
         })
-        return {"messages": [reply], "spent_usd": cost_usd(tokens_in, tokens_out), "answered_by": "rag_agent"}
+        # The sources were outside text and the answer is built from them, so the chat is now tainted
+        # (docs/contracts.md § 1). The "not found" path above never showed them to a model, so it doesn't taint.
+        return {"messages": [reply], "spent_usd": cost_usd(tokens_in, tokens_out), "answered_by": "rag_agent", "tainted": found.untrusted}
 
     return rag_agent

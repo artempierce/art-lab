@@ -22,8 +22,19 @@ class ChatState(MessagesState):
                  {"spent_usd": 0.002}, that amount is *added*. The input guard enforces the budget on it.
     task         this turn's question, rewritten by the supervisor to stand alone, handed to the worker.
     answered_by  which worker answered this turn ("" until one has). Tells the supervisor to finish.
+    steps        how many times the supervisor has sent work to a worker this turn (the guard resets it
+                 to 0). The circuit breaker stops the turn at MAX_STEPS. Counted once per dispatch.
+    handoff      a worker's request that another worker continue ("" = no). The guard resets it.
+    tainted      True once untrusted content (tool results, documents…) has entered this chat. Its
+                 reducer is `operator.or_`: any node returning {"tainted": True} sets it, and False never
+                 clears it, so the whole chat stays tainted. A tainted chat can't run data-changing tools.
+
+    The full contract for these fields: docs/contracts.md § 1.
     """
 
     spent_usd: Annotated[float, operator.add]
     task: str
     answered_by: str
+    steps: int
+    handoff: str
+    tainted: Annotated[bool, operator.or_]

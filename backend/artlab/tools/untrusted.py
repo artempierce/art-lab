@@ -18,9 +18,27 @@ reads as the literal characters, not as a tag.
 
 This escaping is also why ingest doesn't flag documents that merely mention these tags
 (see DOCUMENT_SKIP_RULES in rag/ingest.py).
+
+Who wraps: only the tool gateway (tools/registry.py), for every tool whose output is untrusted. A tool
+hands back its outside text as `Piece`s and never wraps them itself, so no tool can forget to.
 """
 
 import re
+from typing import NamedTuple
+
+
+class Piece(NamedTuple):
+    """One piece of a tool's output, before the gateway wraps it.
+
+    source  where the text came from: a file path, a URL, or the tool's name     "knowledge/brand-voice.md"
+    text    the outside text itself; this is what gets wrapped                   "Titles are at most 60 characters…"
+    label   an optional line written by *our* code, shown just above the         "[1] knowledge/brand-voice.md › Titles"
+            wrapper (outside it), so the model can cite the piece by number
+    """
+
+    source: str
+    text: str
+    label: str = ""
 
 # Our tag names, opening or closing, with any spacing: <untrusted_retrieval, </ system, < /assistant…
 OUR_TAGS = re.compile(r"<(\s*/?\s*(?:untrusted_retrieval|system|assistant)\b)", re.IGNORECASE)

@@ -44,8 +44,8 @@ def make_node():
             refusal = AIMessage(f"Blocked by the input guard ({result.rule}): {result.reason}.")
             return Command(update={"messages": [RemoveMessage(id=message.id), refusal], "answered_by": ""}, goto=END)
 
-        # Passed. Report it (with budget used), clear last turn's routing notes, and hand over.
+        # Passed. Report it (with budget used), clear last turn's routing notes and step count, and hand over.
         write({"stage": "guard", "status": "ok", "detail": result.reason, "ms": ms_since(start)})
-        return Command(update={"task": "", "answered_by": ""}, goto="supervisor")
+        return Command(update={"task": "", "answered_by": "", "steps": 0, "handoff": ""}, goto="supervisor")
 
     return guard

@@ -1,42 +1,83 @@
 """
-Tool registry and untrusted-wrapper tests: who may call what, and wrapped text can't break out.
+Tool gateway and untrusted-wrapper tests: who may call what, every untrusted result comes back wrapped,
+a tainted chat can't run data-changing tools, and wrapped text can't break out.
+
+`tools.call` is async (it runs each tool in a worker thread), so each test drives it with `asyncio.run`.
 """
+
+import asyncio
 
 import pytest
 
 from artlab.tools.registry import ToolDenied, ToolRegistry
-from artlab.tools.untrusted import wrap_untrusted
+from artlab.tools.untrusted import Piece, wrap_untrusted
+
+
+class TwoHits:
+    """A tool result that splits itself into labelled pieces, the way SearchResult does."""
+
+    def pieces(self) -> list[Piece]:
+        return [Piece("a.md", "alpha", label="[1] a.md"), Piece("b.md", "beta", label="[2] b.md")]
 
 
 @pytest.fixture
 def tools():
-    """A registry with one read-only tool (rag_agent only) and one mutating tool."""
+    """A registry with read-only tools (rag_agent only), one of them trusted, and one mutating tool."""
     registry = ToolRegistry()
     registry.register("lookup", lambda query: f"found {query}", tier="read_only", allowed_agents={"rag_agent"}, description="")
+    registry.register("clock", lambda: "12:00", tier="read_only", allowed_agents={"rag_agent"}, description="", untrusted_output=False)
+    registry.register("search", lambda: TwoHits(), tier="read_only", allowed_agents={"rag_agent"}, description="")
     registry.register("save", lambda text: "saved", tier="mutating", allowed_agents={"rag_agent"}, description="")
     return registry
 
 
+def call(tools: ToolRegistry, *args, **kwargs):
+    """Run one `tools.call(...)` to completion (the tests themselves are ordinary functions)."""
+    return asyncio.run(tools.call(*args, **kwargs))
+
+
 def test_allowed_agent_can_call_a_read_only_tool(tools):
-    assert tools.call("rag_agent", "lookup", query="x") == "found x"
+    """The raw value is kept for our code; the model's text is wrapped, because tools are untrusted by default."""
+    result = call(tools, "rag_agent", "lookup", query="x")
+    assert result.ok and result.data == "found x" and result.untrusted
+    assert result.text == wrap_untrusted("found x", "lookup")
+
+
+def test_trusted_tools_are_not_wrapped(tools):
+    """A tool registered with untrusted_output=False (our own data) comes back as plain text."""
+    result = call(tools, "rag_agent", "clock")
+    assert result.text == "12:00" and not result.untrusted
+
+
+def test_pieces_are_wrapped_one_by_one_with_labels_outside(tools):
+    """Each piece gets its own wrapper; the citation label stays outside it, so the model can cite [1]."""
+    text = call(tools, "rag_agent", "search").text
+    assert text == f"[1] a.md\n{wrap_untrusted('alpha', 'a.md')}\n\n[2] b.md\n{wrap_untrusted('beta', 'b.md')}"
 
 
 def test_other_agents_are_refused(tools):
     """The allow-list is enforced by the registry, not trusted to the caller."""
     with pytest.raises(ToolDenied, match="main_agent may not use lookup"):
-        tools.call("main_agent", "lookup", query="x")
+        call(tools, "main_agent", "lookup", query="x")
 
 
 def test_unknown_tool_is_refused(tools):
     with pytest.raises(ToolDenied, match="unknown tool"):
-        tools.call("rag_agent", "delete_everything")
+        call(tools, "rag_agent", "delete_everything")
 
 
 def test_mutating_tools_are_refused_until_approval_exists(tools):
     """Even an allowed agent can't run a data-changing tool: that needs your Approve click (Phase 6).
     The tier is fixed at registration, so the caller can't claim it's read-only (manifest bug #2)."""
     with pytest.raises(ToolDenied, match="needs your approval"):
-        tools.call("rag_agent", "save", text="x")
+        call(tools, "rag_agent", "save", text="x")
+
+
+def test_a_tainted_chat_can_never_run_mutating_tools(tools):
+    """Once untrusted content is in the chat, data-changing tools are refused whatever the model asks
+    (the lethal-trifecta rule). Phase 6's approvals will not lift this."""
+    with pytest.raises(ToolDenied, match="read untrusted content"):
+        call(tools, "rag_agent", "save", tainted=True, text="x")
 
 
 def test_wrapped_text_cannot_close_the_wrapper_early():
