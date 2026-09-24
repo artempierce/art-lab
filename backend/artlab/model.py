@@ -65,13 +65,16 @@ def make_model() -> BaseChatModel:
 
 
 class FakeChatModel(BaseChatModel):
-    """A free, predictable stand-in for Claude. It plays three roles:
+    """A free, predictable stand-in for Claude. It plays four roles:
 
-      supervisor   when asked for a RouteDecision (structured output), it routes to rag_agent if the
-                   question contains a KNOWLEDGE_HINTS word, otherwise to "respond"
-      rag_agent    when its prompt contains <untrusted_retrieval> sources, it quotes the start of
-                   source [1] and cites it — so you can see real retrieval results in the UI
-      respond      otherwise, it answers with the next of `replies`, in a loop
+      supervisor       when asked for a RouteDecision (structured output), it routes to rag_agent if
+                       the question contains a KNOWLEDGE_HINTS word, otherwise to "respond"
+      rag_agent        when its prompt contains <untrusted_retrieval> sources, it quotes the start of
+                       source [1] and cites it — so you can see real retrieval results in the UI
+      rag_agent retry  when asked for a Rephrase (structured output, after a first search found
+                       nothing), it rewords the question by appending " policy" — deterministic, and
+                       different enough from the original to plausibly match a second time
+      respond          otherwise, it answers with the next of `replies`, in a loop
 
     How structured output works (and why `bind_tools` is here): LangChain's `with_structured_output(Schema)`
     turns the schema into a *tool* the model is forced to call, then reads the tool call's arguments
@@ -103,6 +106,10 @@ class FakeChatModel(BaseChatModel):
                 "reason": "fake router: mentions the studio's docs" if to_rag else "fake router: general question",
                 "question": question,
             }
+            return AIMessage("", tool_calls=[{"name": self.tool_name, "args": args, "id": "fake-call", "type": "tool_call"}])
+        if self.tool_name == "Rephrase":
+            question = next(m.content for m in reversed(messages) if isinstance(m, HumanMessage))
+            args = {"query": f"{question} policy"}
             return AIMessage("", tool_calls=[{"name": self.tool_name, "args": args, "id": "fake-call", "type": "tool_call"}])
         if self.tool_name:
             raise ValueError(f"the fake model can't fill in {self.tool_name}")

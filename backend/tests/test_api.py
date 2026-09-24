@@ -133,12 +133,14 @@ def test_a_cited_answer_taints_the_chat_and_it_stays_tainted(tmp_path, kb_with_p
 
 
 def test_empty_knowledge_base_answers_not_found_without_a_model_call(client):
-    """No chunks found → the fixed "not found" answer, and the trace says no model was called."""
+    """No chunks found on either search (the empty knowledge base can't match a rephrased query
+    either) → the fixed "not found" answer, and the trace says the answering model was never called.
+    (The rag_agent-stage trace has two lines here: the rephrase call, then this one — the last one.)"""
     events = send(client, "What is our policy on filming in space?")
 
     assert answer(events) == NOT_FOUND
-    rag_line = [d for n, d in events if n == "trace" and d["stage"] == "rag_agent"][0]
-    assert "no model call" in rag_line["detail"]
+    rag_line = [d for n, d in events if n == "trace" and d["stage"] == "rag_agent"][-1]
+    assert "no answer call" in rag_line["detail"]
 
 
 def test_rag_agent_model_sees_only_the_question_and_wrapped_sources(tmp_path, kb_with_policy):
