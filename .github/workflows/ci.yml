@@ -8,6 +8,16 @@
 #             one normal message must stream back an answer; one injection must be blocked
 #
 # Nothing here ever calls a paid model: ARTLAB_FAKE_LLM=1 for the whole workflow.
+#
+# Docs-only pull requests skip the three jobs. A first job, `changes`, lists the files the PR touches:
+# if every one is on the SAFE list (docs nothing reads at test time), the three jobs are *skipped*.
+# GitHub counts a skipped required check as passed, so the PR can still merge. (Why not `paths-ignore`
+# on the whole workflow? Then the required checks would never report at all, and a docs PR would wait
+# for them forever.)
+#
+#   * The list names what's safe, not what's code, so a new folder is tested unless we say otherwise.
+#   * If `changes` itself fails, the jobs run anyway: a broken check must never mean "skip the tests".
+#   * Pushes to main always run everything, so every merge is still checked.
 
 name: CI
 
@@ -31,8 +41,47 @@ env:
   LANGSMITH_TRACING: "false" # send nothing to LangSmith
 
 jobs:
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.check.outputs.code }} # "true" = run the three jobs, "false" = only safe files changed
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history, so the PR's base commit is here to compare against
+
+      # SAFE: README, CLAUDE.md, .gitignore and docs/ — nothing the tests read. Two exceptions inside
+      # docs/: architecture.md and requirements.md are ingested into the knowledge base
+      # (config.DEFAULT_SOURCES), so the retrieval eval reads them. knowledge/, evals/ and
+      # backend/skills/ are read by tests too, so like everything else they count as code.
+      - name: Only safe files changed?
+        id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "Not a pull request: run everything."
+            echo "code=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          SAFE='^(README\.md|CLAUDE\.md|\.gitignore|docs/.+)$'
+          INGESTED='^docs/(architecture|requirements)\.md$'
+          git diff --name-only "$BASE" HEAD > changed.txt
+          echo "Changed files:"; cat changed.txt
+          if grep -vE "$SAFE" changed.txt | grep -q . || grep -qE "$INGESTED" changed.txt; then
+            echo "code=true" >> "$GITHUB_OUTPUT"; echo "→ code changed: run the tests"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"; echo "→ only safe files changed: skip the tests"
+          fi
+
   backend:
     name: Backend tests
+    needs: changes
+    # Skipped only when `changes` said "false". `!cancelled()` lets this run even if `changes` failed
+    # (its output is then empty, not "false"): a broken check must never skip the tests.
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -63,6 +112,8 @@ jobs:
 
   frontend:
     name: Frontend lint + build
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }} # same rule as backend
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -88,6 +139,8 @@ jobs:
 
   smoke:
     name: Smoke test (real server, fake model)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }} # same rule as backend
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:

@@ -125,6 +125,12 @@ GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on 
 
 The whole workflow runs with `ARTLAB_FAKE_LLM=1` and LangSmith off: no API keys, no secrets, $0.
 
+**Docs-only PRs skip the three jobs.** A first job, *What changed*, checks the PR's files. If they're all
+safe (`README.md`, `CLAUDE.md`, `.gitignore`, `docs/`), the three jobs are skipped, and GitHub counts a
+skipped required check as passed. The exceptions are `docs/architecture.md` and `docs/requirements.md`:
+they're ingested into the knowledge base, so they still run the tests. So do `knowledge/`, `evals/` and
+`backend/skills/`, because tests read them. Pushes to `main` always run everything.
+
 ---
 
 ## Build status
