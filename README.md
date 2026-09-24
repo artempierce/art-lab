@@ -14,7 +14,7 @@ searching the knowledge base, blocked, or happy (with a wink).
 > one phase at a time.
 
 **Design book** (PRD, architecture, workflows, user scenarios, build plan, decisions):
-[`docs/design.html`](docs/design.html) · published at https://claude.ai/artifact/XLdjd89TAy23yNsNzcS2sj
+[`docs/design.html`](docs/design.html)
 
 ---
 
