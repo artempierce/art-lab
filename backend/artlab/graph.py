@@ -19,7 +19,7 @@ straight away, and the node continues from there. That's why the `approval` node
 run of the same node must never repeat a side effect (like running the tool) that only belongs after
 the resume.
 
-The graph today (Phase 7 — memory):
+The graph today (Phase 10 — output guard and caps):
 
     START ──▶ guard ──blocked──────────────────────────────────────────▶ END   (refusal, no model call)
                 │
