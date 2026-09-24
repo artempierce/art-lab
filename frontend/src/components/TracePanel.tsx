@@ -32,8 +32,11 @@ const STAGE_COLOR: Record<string, string> = {
   skill: 'text-t-skill', // Phase 8: a load_skill call, kept apart from the generic "tool" colour
 }
 
-// Status → icon at the start of the line. Unknown statuses get a plain dot.
-const STATUS_ICON: Record<string, string> = { ok: '✓', blocked: '⛔', error: '✕' }
+// Status → icon at the start of the line. Unknown statuses get a plain dot. `flagged` is the input
+// guard's classifier tainting a message without blocking it; `stopped` is a turn cut off at its
+// time/cost cap (Phase 10, contracts.md § 14); `approval` is the tool loop pausing for your
+// Approve/Reject click (Phase 6).
+const STATUS_ICON: Record<string, string> = { ok: '✓', blocked: '⛔', error: '✕', flagged: '⚑', stopped: '■', approval: '?' }
 
 /** Short token count: 812 → "812", 1234 → "1.2k". */
 function formatTokens(n: number): string {
