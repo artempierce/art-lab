@@ -15,6 +15,7 @@ from langchain_core.language_models import BaseChatModel
 
 from artlab.agents.state import ChatState
 from artlab.agents.tool_loop import run_tool_loop
+from artlab.guards.caps import limits_from
 from artlab.tools.registry import ToolRegistry
 
 # The node name: the supervisor's route value (docs/contracts.md § 3) and the trace stage for this
@@ -62,11 +63,13 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
         With no tools registered (Phase 5's real state) this is exactly one model call
         (docs/contracts.md § 9: "an agent with no tools is just one model call through the same loop");
         with load_skill registered (Phase 8, § 12) it may be two, if the model reaches for the
-        style-guide skill first. Either way, running through the shared loop gets it the taint lock and
-        cost accounting every other worker gets, for free.
+        style-guide skill first. Either way, running through the shared loop gets it the taint lock,
+        cost accounting and turn caps (`limits_from`, docs/contracts.md § 14, ticket G2) every other
+        worker gets, for free.
         """
         r = await run_tool_loop(
             model, tools, NAME, PROMPT, state["task"], tainted_in=state.get("tainted", False),
+            limits=limits_from(state),
         )
         update = {"messages": [r.reply], "spent_usd": r.spent_usd, "answered_by": NAME}
         if r.pending:  # english_coach has no mutating tool; kept so every worker honours the same loop contract

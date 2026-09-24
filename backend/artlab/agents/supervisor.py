@@ -24,6 +24,7 @@ from pydantic import Field
 from artlab.agents.common import ms_since, text_of, tokens_used
 from artlab.agents.state import ChatState
 from artlab.agents.workers import WorkerSpec
+from artlab.guards import caps
 from artlab.model import cost_usd
 from artlab.tools.untrusted import wrap_untrusted
 
@@ -58,6 +59,25 @@ def _prompt(workers: tuple[WorkerSpec, ...]) -> str:
 def _answered_by_name(name: str) -> str:
     """How the trace panel names who answered: Arty himself (the `respond` node) or a worker's own name."""
     return "Arty" if name == "respond" else name
+
+
+def _cap_stop(state: ChatState, write, start: float) -> Command | None:
+    """None if this turn is still inside its time/cost budget; otherwise the `Command` that stops it
+    right here (Phase 10, docs/contracts.md § 14): append `caps.STOP_NOTICE` (naming which cap fired),
+    a trace line with status "stopped", and go to `output_guard` — the same destination the step-limit
+    breaker below uses, so a turn cut short by a cap still gets its answer checked before you see it.
+
+    Called at the top of every dispatch branch below (A, C, D), so a turn stops the moment it's asked
+    to do *anything* more, whether that's the very first routing call, a planned step, or a handoff —
+    not only when a worker happens to finish. `write`/`start` are the caller's own `get_stream_writer()`
+    result and `time.perf_counter()` reading, passed through so this shares one trace line format with
+    every other check in this file.
+    """
+    kind = caps.check(state)
+    if kind is None:
+        return None
+    write({"stage": "arty", "status": "stopped", "detail": f"stopped · turn {kind} limit reached", "ms": ms_since(start)})
+    return Command(update={"messages": [AIMessage(caps.STOP_NOTICE.format(kind=kind))]}, goto="output_guard")
 
 
 def _clean_plan(next_worker: str, then: list[str]) -> list[str]:
@@ -150,11 +170,14 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
     async def supervisor(state: ChatState) -> Command:
         """Node 2 — decide who answers, follow a plan or a handoff, and stop at the step limit.
 
-        Checked in order (docs/contracts.md §§ 3, 10, 13); each dispatch below (routing, a planned
+        Checked in order (docs/contracts.md §§ 3, 10, 13, 14); each dispatch below (routing, a planned
         step, or a handoff) counts once towards the step limit, and its trace line ends with
         " · step n/{MAX_STEPS}". Every step-limit stop (A, C and D below) goes to `output_guard`
         instead of straight to END (Phase 10, docs/contracts.md § 14) — the STEP_LIMIT_NOTICE it
-        appends is still an answer this turn produced, so it gets checked like any other:
+        appends is still an answer this turn produced, so it gets checked like any other. The turn
+        caps (`_cap_stop`, § 14, ticket G2) are checked first in each of A, C and D, for the same
+        reason: a turn over its time or dollar budget stops before doing anything more, whatever the
+        step count says.
           0. A worker left a data-changing tool call waiting for your Approve/Reject click
              (`pending_approval`, docs/contracts.md § 10): go straight there, before even asking
              whether the turn is "done" — a pending request means it isn't, whatever `answered_by`
@@ -174,7 +197,8 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
              rule above), then dispatch to `next` and remember `then` as this turn's plan. In practice
              this can never hit the step limit itself — the guard resets `steps` to 0 at the start of
              every turn, and it's only reached through A or C afterwards — but the same check guards
-             it for safety.
+             it for safety. The turn-cap check here matters least of the three (the turn just started,
+             so it's almost never already over budget) but stays for uniformity (docs/contracts.md § 14).
 
         `Command`'s return type isn't parameterised with a `Literal` of worker names here, because
         that set is only known once `workers` is passed in at graph-build time; graph.py declares the
@@ -192,6 +216,9 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
         # A. A plan is running and there's another step: hand that worker's answer to the next one.
         plan = state.get("plan") or []
         if state.get("answered_by") and plan:
+            stop = _cap_stop(state, write, start)
+            if stop:
+                return stop
             if steps >= MAX_STEPS:
                 write({
                     "stage": "arty", "status": "stopped",
@@ -235,6 +262,9 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
         # C. A handoff to follow.
         handoff = state.get("handoff", "")
         if handoff:
+            stop = _cap_stop(state, write, start)
+            if stop:
+                return stop
             if handoff not in by_name:
                 write({
                     "stage": "arty", "status": "error",
@@ -253,7 +283,10 @@ def make_node(model: BaseChatModel, workers: tuple[WorkerSpec, ...]):
             })
             return Command(update={"steps": steps + 1, "answered_by": "", "handoff": ""}, goto=handoff)
 
-        # D. Nobody has answered yet: route (unless the step limit was already reached).
+        # D. Nobody has answered yet: route (unless a cap or the step limit was already reached).
+        stop = _cap_stop(state, write, start)
+        if stop:
+            return stop
         if steps >= MAX_STEPS:
             write({
                 "stage": "arty", "status": "stopped",

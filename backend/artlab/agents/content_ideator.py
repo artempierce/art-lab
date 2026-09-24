@@ -21,6 +21,7 @@ from langchain_core.messages import BaseMessage
 
 from artlab.agents.state import ChatState
 from artlab.agents.tool_loop import run_tool_loop
+from artlab.guards.caps import limits_from
 from artlab.tools.registry import ToolRegistry
 
 # The node name, and the route value the supervisor's RouteDecision.next picks (docs/contracts.md § 2).
@@ -71,7 +72,8 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
              both would show the model its own question twice.
           2. Run the tool loop with this worker's prompt, the turn's standalone question (`task`), and
              that history — plus the chat's incoming `tainted`/`taint_sources`, so a request to save
-             right after tainted research still needs approval and still shows why.
+             right after tainted research still needs approval and still shows why — and this turn's
+             remaining time/dollar budget (`limits_from`, docs/contracts.md § 14, ticket G2).
           3. Return the reply and its cost, and set `answered_by` so the supervisor knows this step
              finished (docs/contracts.md § 2).
           4. A tool waiting for your click (`result.pending`)? Pass it on as `pending_approval`
@@ -86,6 +88,7 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
             tainted_in=state.get("tainted", False),
             taint_sources_in=state.get("taint_sources", []),
             history=history,
+            limits=limits_from(state),
         )
         update = {"messages": [result.reply], "spent_usd": result.spent_usd, "answered_by": NAME}
         if result.pending:
