@@ -474,3 +474,66 @@ catchy hooks for these 3 ideas" → content_ideator → `skill loaded hook-formu
 `tools/skills.py`, `tools/catalog.py`, `config.py` (SKILLS_DIR), `agents/tool_loop.py`, `agents/content_ideator.py` and
 `agents/english_coach.py` (prompt slimming), `model.py` (the fake load_skill), `frontend/src/index.css` +
 `TracePanel.tsx` (the `skill` colour), tests.
+
+## 13. Phase 9: handoffs through artifacts (planned upfront) and 9b: agent calls agent
+
+**Decision (2026-09-24, Sol): the supervisor plans upfront.** For a multi-step request, Arty's single routing call returns
+the whole plan (at most 3 steps), which the trace shows. Code then runs the steps in order, passing each step's
+**artifact** to the next. The plan is not re-decided between steps, so there's no model call per step. The 5-step breaker
+(§ 3) still counts every dispatch.
+
+**RouteDecision gains `then`:** `then: list[Literal[<worker names>]]`, default `[]`, at most `MAX_PLAN - 1 = 2`, with the
+description "further workers to run after `next`, in order, each building on the previous one's output; leave empty for
+single-step requests". `next` stays as it is, so single-step routing is unchanged. Duplicates and `respond` inside `then`
+are dropped by code.
+
+**State:** `plan: list[str]` (overwrite): the remaining steps. `artifacts: list[dict]` (overwrite; the guard resets both
+each turn): `{kind, agent, text, tainted}` for each finished step this turn.
+
+**WorkerSpec gains `produces: str`**, the artifact kind: respond/rag_agent `"answer"`, youtube_researcher `"research"`,
+content_ideator `"ideas"`, english_coach `"polished text"`.
+
+**Supervisor flow:**
+- Routing (the first step): the trace line adds `· plan: youtube_researcher → content_ideator → english_coach`
+  when `then` is non-empty; the update sets `plan = then`.
+- A worker answered and `plan` is non-empty: record that worker's artifact (its last AIMessage text; `tainted` = the chat's
+  flag after that step), pop the next step, and dispatch it **with no model call**. That's steps += 1, the breaker applies,
+  and the trace says `→ content_ideator · plan step 2/3 · step n/5`. The next worker's `task` is
+  `"<original question>\n\nInput from <agent> (<kind>):\n" + wrap_untrusted(artifact.text, f"artifact:{agent}")` when the
+  artifact is tainted, or the plain text otherwise.
+  Why wrap it: an answer built from untrusted content is itself untrusted (CLAUDE.md), so the next agent must treat it as
+  data. The chat is already tainted, so later data-changing tools still ask with a warning (§ 10).
+- `plan` empty and a worker answered → the existing "done" branch (→ remember).
+- The existing `handoff` field is unused and stays reserved; plans replace it.
+
+Each step's answer is its own chat message. You see the research, then the ideas, then the polished ideas, streamed
+one after another, and the last one is the final answer.
+
+**9b: agent calls agent (`tools/agents.py`).** `make_agent_tool(model, tools, callee, prompt)` builds an **async** tool
+`ask_<callee>(question: str)`, which runs `run_tool_loop(model, tools, callee, prompt, question, tainted_in=…, depth=1)`
+and returns an `AgentAnswer(text, spent_usd, tainted)` with `.pieces()` (source `f"agent:{callee}"`).
+- Registered as `ask_youtube_researcher`, allowed for **content_ideator**, `read_only`, `untrusted_output=True` (the
+  researcher's answer is built from YouTube data).
+- **Depth cap 1:** `run_tool_loop(..., depth=0)` is the default. A nested loop at depth 1 is **not offered** any
+  `ask_*` tool, and if the model asks for one anyway, the loop answers "refused: agents can't call agents from inside
+  another agent's call (depth limit 1)" without running it. So agents can't recurse. (The loop enforces this, not the
+  gateway, because only the loop knows its depth.)
+- **Shared budget:** the nested loop's cost is added to the caller's (`LoopResult.spent_usd` adds `result.data.spent_usd`
+  when the data has it), and it has its own MAX_TOOL_CALLS cap. The call itself counts as one of the caller's 3.
+- The nested loop's trace lines keep their stage (`youtube_researcher`), with the detail prefixed `↳ for content_ideator ·`.
+- **Registry:** `call()` and `run_approved()` support async tool functions: `await fn(**args)` under the same
+  `wait_for` timeout, with `to_thread` only for plain functions. Agent tools get `timeout_s = 60`.
+
+**Fake model:**
+- Plan: the fake router collects every worker hint that matches the question and orders them canonically
+  (youtube_researcher → content_ideator → english_coach). The first is `next` and the rest are `then`. Add `niche` to the
+  researcher hints and let the coach hint match `polish\w*`. So S2, "Find a niche in budget desk gear and give me 3
+  polished ideas", plans all three.
+- 9b: `FAKE_TOOL_HINTS["ask_youtube_researcher"] = r"\b(trend\w*|research)\b"`.
+
+**Who owns what (Phase 9):**
+
+| Ticket | Model | Owns |
+|---|---|---|
+| H1 plan + artifacts | Sonnet (Opus review) | `agents/supervisor.py`, `agents/state.py`, `agents/guard.py` (reset plan/artifacts), `agents/workers.py` (`produces`), `model.py` (the fake router's plan only), `tests/test_handoffs.py` (new); existing route tests only where the plan changes them |
+| H2 agent as a tool | Sonnet (Opus review) | `tools/agents.py` (new), `tools/registry.py` (async tool support), `tools/catalog.py`, `agents/tool_loop.py` (depth, nested spend, trace prefix), `model.py` (FAKE_TOOL_HINTS only), `tests/test_agent_tools.py` (new) |
