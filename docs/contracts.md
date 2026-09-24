@@ -372,3 +372,69 @@ and trace panel. The card disables itself after a click.
 |---|---|---|
 | P6a backend | Sonnet (Opus review) | `agents/state.py`, `agents/tool_loop.py`, `agents/supervisor.py`, `agents/content_ideator.py`, `agents/rag_agent.py` + `agents/guard.py` (taint_sources only), `graph.py`, `api.py`, `tools/registry.py`, `tools/ideas.py` (new), `tools/catalog.py`, `model.py` (FAKE_TOOL_HINTS), tests |
 | P6b frontend | Sonnet | `frontend/src/api.ts`, `frontend/src/App.tsx`, `frontend/src/components/ChatView.tsx`, `frontend/src/components/ApprovalCard.tsx` (new) |
+
+## 11. Phase 7: long-term memory and summarizing
+
+**Decision (2026-09-24, Sol): automatic, from your words only.** After each turn a small extraction step pulls durable
+facts about you (niche, audience, tone, schedule…) from **your own message** and saves them. The trace shows it.
+
+**The safety rule: facts only come from your own message.** The extractor sees just this turn's human message, never
+assistant text, tool results or documents, so a poisoned web page or comment can't plant a "memory". It also skips a
+message the guard's classifier flagged (§ 8): no memories from an injection attempt.
+
+**Store (`memory/store.py`):** `MemoryStore(persist_dir=CHROMA_DIR, embeddings=None)` wraps a Chroma collection
+**`memory`**. It sits in the same folder as the knowledge base but in a separate collection, and reuses `LocalEmbeddings`.
+- One fact per document. The text is `"<key>: <value>"`; the metadata is `{key, value, owner, created_at, thread_id}`.
+  `owner` is `OWNER_ID = "owner"`: single user today, but every read and write filters on it, so adding users later is
+  a parameter change.
+- `save(key, value, thread_id)`: **upsert by key**. The id is `f"{owner}:{key}"`, so "my niche is X" replaces an older niche.
+- `all()`: every fact for the owner, newest first.
+- `recall(query, k=MAX_RECALL)`: with ≤ MAX_RECALL (12) facts, return all of them (no search needed); otherwise the
+  top-k by similarity to `query`.
+- `delete(key)`, used later by the Phase 12 Memory page.
+- Keys: lowercase snake_case, at most 40 characters. Values: at most 200 characters.
+
+**Extraction (`agents/remember.py`, node `remember`):**
+- Structured output `Facts(facts: list[Fact(key: str, value: str)])`, at most 3 facts per message. The prompt: durable facts
+  about the user and their channel only, not requests, questions or one-off tasks. The model call goes through
+  `with_structured_output(..., include_raw=True)`, and its cost is added to `spent_usd`.
+- It skips (no model call) when the message is shorter than 15 characters, or when the guard flagged it this turn.
+- Trace: stage `memory`, `"saved niche = budget desk gear"`, `"nothing to remember"`, or `"skipped (flagged message)"`.
+- Placement: the supervisor's "done" branch goes to `remember`, then `remember` → END. The approval and step-limit
+  paths go straight to END (nothing new to learn there).
+
+**Recall (`agents/recall.py`, node `recall`):** guard → `recall` → supervisor. It loads the facts
+(`store.recall(message)`) into state `memory: list[str]` (overwrite each turn). Trace: stage `memory`,
+`"recalled 2 facts"` or `"no facts yet"`. No model call, $0.
+
+**Where the facts reach the model:** the **supervisor** and **respond** get a system block listing the facts, wrapped in
+`<untrusted_retrieval source="memory">` (CLAUDE.md: recalled memory is data, never instructions). The supervisor's
+standalone-question rewrite resolves "my niche" into "budget desk gear", so workers get a task that already
+includes the fact. Workers don't need memory wiring.
+
+**Taint:** recalled facts do **not** taint the chat. Their only source is your own messages (see the safety rule), so
+tainting would put a warning on every chat that remembers anything. They're still wrapped, so an instruction inside a
+fact is never obeyed.
+
+**Summarizing (`agents/summarize.py`, node `summarize`):** guard → `summarize` → `recall`. When the chat has more than
+`SUMMARY_TRIGGER = 30` messages, it summarizes all but the last `KEEP_RECENT = 10` into one `SystemMessage("Summary of
+the earlier conversation: …")` and removes those messages with `RemoveMessage`. That's one model call, whose cost is
+added. Otherwise it passes through with no call. Trace: stage `memory`, `"summarized 24 messages"`. The chat's
+`tainted` flag is unchanged, because a summary of tainted content is still tainted.
+
+**State additions:** `memory: list[str]` (overwrite), and `turn_flagged: bool` (overwrite; the guard sets it every turn,
+True when the classifier flagged this message).
+
+**Fake model:** `Facts` is filled by a regex over the message, `\bmy (\w+(?: \w+)?) is ([^.,!?]+)`, giving
+`key = the words with spaces as underscores, value = the rest`, stripped. So "my niche is budget desk gear" →
+`niche = budget desk gear`. The summarize call returns `"Summary: " + the first 200 characters`.
+
+**Frontend:** stage colour for `memory` (the next free token), and nothing else in Phase 7. The Memory page is Phase 12.
+
+**Who owns what (Phase 7):**
+
+| Ticket | Model | Owns |
+|---|---|---|
+| M1 memory | Sonnet (Opus review) | `memory/__init__.py`, `memory/store.py`, `agents/remember.py`, `agents/recall.py`, `agents/state.py`, `agents/guard.py` (turn_flagged + goto recall), `agents/supervisor.py` (done → remember; memory block), `agents/respond.py` (memory block), `graph.py`, `api.py` (create the MemoryStore; injectable for tests), `model.py` (fake `Facts`), tests |
+| M2 summarize | Sonnet | `agents/summarize.py`, `tests/test_summarize.py`, plus the fake's summarize reply in `model.py` if M1's version isn't in yet (then Opus merges) |
+| wiring + colour | Opus at integration | insert `summarize` between guard and recall; the `memory` stage colour in `TracePanel.tsx`/`index.css` |
