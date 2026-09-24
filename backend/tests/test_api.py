@@ -18,8 +18,8 @@ from langchain_core.embeddings import DeterministicFakeEmbedding
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import Field
 
+from artlab.agents.rag_agent import NOT_FOUND
 from artlab.api import create_app
-from artlab.graph import NOT_FOUND
 from artlab.guards import input as input_guard
 from artlab.guards.input import MAX_INPUT_CHARS
 from artlab.model import FakeChatModel, fake_model
@@ -112,6 +112,24 @@ def test_knowledge_question_goes_to_rag_agent_with_sources(tmp_path, kb_with_pol
         thread_id = events[0][1]["thread_id"]
         history = client.get(f"/api/threads/{thread_id}").json()["messages"]
         assert history[-1]["sources"] == sources  # sources survive a reload
+
+
+def test_a_cited_answer_taints_the_chat_and_it_stays_tainted(tmp_path, kb_with_policy):
+    """Small talk leaves the chat clean. Once rag_agent answers from documents (untrusted text), the chat
+    is tainted, and a later small-talk turn doesn't clear it: the documents are still in the history.
+    This is what will keep data-changing tools locked in that chat (docs/contracts.md § 1)."""
+    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=kb_with_policy)
+    with TestClient(app) as client:
+        thread_id = send(client, "hi")[0][1]["thread_id"]
+        config = {"configurable": {"thread_id": thread_id}}
+        tainted = lambda: client.portal.call(app.state.graph.aget_state, config).values.get("tainted", False)  # noqa: E731
+        assert tainted() is False
+
+        send(client, "What is our sponsorship disclosure rule?", thread_id)
+        assert tainted() is True
+
+        send(client, "thanks!", thread_id)
+        assert tainted() is True
 
 
 def test_empty_knowledge_base_answers_not_found_without_a_model_call(client):

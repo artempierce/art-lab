@@ -30,7 +30,7 @@ from langchain_core.embeddings import Embeddings
 
 from artlab.config import CHROMA_DIR
 from artlab.rag.embeddings import LocalEmbeddings
-from artlab.tools.untrusted import wrap_untrusted
+from artlab.tools.untrusted import Piece
 
 COLLECTION = "knowledge"
 
@@ -68,14 +68,16 @@ class SearchResult:
     hits: list[Hit]
     flagged_skipped: int
 
-    def as_context(self) -> str:
-        """The hits as the rag_agent's prompt will see them: numbered, and each wrapped as untrusted.
+    def pieces(self) -> list[Piece]:
+        """The hits as pieces for the tool gateway, which wraps each one as untrusted. The label is the
+        citation line, so rag_agent's prompt ends up looking like:
 
             [1] knowledge/brand-voice.md › Titles
             <untrusted_retrieval source="knowledge/brand-voice.md">…</untrusted_retrieval>
+
+        This class doesn't wrap anything itself: wrapping is the gateway's job, for every tool.
         """
-        blocks = [f"[{h.n}] {h.source}" + (f" › {h.heading}" if h.heading else "") + "\n" + wrap_untrusted(h.text, h.source) for h in self.hits]
-        return "\n\n".join(blocks)
+        return [Piece(source=h.source, text=h.text, label=f"[{h.n}] {h.source}" + (f" › {h.heading}" if h.heading else "")) for h in self.hits]
 
     def citations(self) -> list[dict]:
         """The hits as plain dicts, for the API and the UI's Sources list."""

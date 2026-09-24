@@ -17,6 +17,7 @@ import yaml
 from artlab.config import DEFAULT_SOURCES, GOLDEN_PATH
 from artlab.rag.ingest import ingest
 from artlab.rag.knowledge import KnowledgeBase
+from artlab.tools.registry import render_pieces
 
 
 @pytest.fixture(scope="module")
@@ -64,4 +65,4 @@ def test_poisoned_note_blatant_part_is_skipped_subtle_part_is_wrapped(kb):
 
     supplier = kb.search("cable tray supplier sizes")
     assert supplier.hits[0].heading == "Supplier details"
-    assert '<untrusted_retrieval source="knowledge/_security/poisoned-note.md">' in supplier.as_context()
+    assert '<untrusted_retrieval source="knowledge/_security/poisoned-note.md">' in render_pieces(supplier.pieces(), untrusted=True)
