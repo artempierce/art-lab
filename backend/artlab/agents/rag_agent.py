@@ -149,7 +149,7 @@ def make_node(model: BaseChatModel, tools: ToolRegistry):
 
         # 3. Still nothing, after up to MAX_SEARCHES searches: give up without asking the model to answer.
         if not result.hits:
-            write({"stage": "rag_agent", "status": "ok", "detail": "no relevant chunks after 2 searches → not found (no answer call)", "ms": 0})
+            write({"stage": "rag_agent", "status": "ok", "detail": "no relevant chunks → not found (no answer call)", "ms": 0})
             return {"messages": [AIMessage(NOT_FOUND)], "answered_by": "rag_agent", "spent_usd": spent}
 
         # 4. Answer from the sources only.
