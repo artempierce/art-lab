@@ -23,6 +23,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import Field
 
 from artlab.api import create_app
+from artlab.memory.store import MemoryStore
 from artlab.model import FakeChatModel, fake_model
 from artlab.rag.ingest import ingest
 from artlab.rag.knowledge import KnowledgeBase
@@ -74,6 +75,12 @@ def empty_kb(tmp_path) -> KnowledgeBase:
     return KnowledgeBase(tmp_path / "chroma", embeddings=DeterministicFakeEmbedding(size=32), min_score=-1)
 
 
+def empty_memory(tmp_path) -> MemoryStore:
+    """A private, temp-folder memory store with instant fake embeddings (Phase 7, M1) — every real
+    graph needs one now that `recall`/`remember` are permanent nodes."""
+    return MemoryStore(tmp_path / "chroma-memory", embeddings=DeterministicFakeEmbedding(size=32))
+
+
 def kb_with_policy(tmp_path) -> KnowledgeBase:
     """A knowledge base holding one small policy file, so a question about it taints the chat
     (test_api.py's `kb_with_policy` fixture, reused here as a plain function)."""
@@ -101,6 +108,7 @@ def app_client(tmp_path, model, knowledge=None):
     app = create_app(
         model=model, checkpointer=InMemorySaver(),
         knowledge=knowledge or empty_kb(tmp_path), ideas_dir=tmp_path / "ideas",
+        memory=empty_memory(tmp_path),
     )
     with TestClient(app) as client:
         yield client, app

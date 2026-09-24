@@ -19,19 +19,19 @@ straight away, and the node continues from there. That's why the `approval` node
 run of the same node must never repeat a side effect (like running the tool) that only belongs after
 the resume.
 
-The graph today (Phase 6 — approvals):
+The graph today (Phase 7 — memory):
 
     START ──▶ guard ──blocked──────────────────────────────────────────▶ END   (refusal, no model call)
                 │
                pass
                 ▼
-            supervisor ──"respond"────▶ respond ─────┐   answers directly (small talk, general help)
-       (main agent, Arty)  ──"rag_agent"─▶ rag_agent ─┤   searches the knowledge base, answers with citations
-                │  ▲                                  │
-                │  └──────────── a worker answered ◀──┘   (or asks to hand off to another worker)
-                ├── a tool needs your click ──▶ approval ──▶ END   (interrupt(); resumes via /api/chat/resume)
-                ├── finish ────────────────────────────────────────────▶ END
-                └── step limit reached (5 dispatches) ──────────────────▶ END  (with a note in the answer)
+             recall ──▶ supervisor ──"respond"────▶ respond ─────┐   answers directly (small talk, general help)
+     (loads state["memory"]) (main agent, Arty)  ──"rag_agent"─▶ rag_agent ─┤   searches the knowledge base, cites sources
+                                 │  ▲                                  │
+                                 │  └──────────── a worker answered ◀──┘   (or asks to hand off to another worker)
+                                 ├── a tool needs your click ──▶ approval ──▶ END  (interrupt(); resumes via /api/chat/resume)
+                                 ├── finish ──▶ remember ──▶ END   (saves facts from YOUR message, docs/contracts.md § 11)
+                                 └── step limit reached (5 dispatches) ────▶ END  (with a note in the answer)
 
 The supervisor is the "main agent", and it has a name: **Arty** (a little retro computer with a face
 and a beret in the web UI, frontend/src/components/Arty.tsx). Arty decides who answers each message,
@@ -49,11 +49,17 @@ How the trace panel gets its lines: each node calls `get_stream_writer()` and wr
 e.g. {"stage": "guard", "status": "ok", "detail": "...", "ms": 1}. LangGraph delivers those dicts on
 its "custom" stream; api.py forwards them to the browser as `trace` events.
 
-Where the nodes themselves live: each one is its own module under `agents/` (guard.py,
-supervisor.py, respond.py, rag_agent.py), so that different tickets can work on different nodes in
-parallel without touching a shared file. This module only draws the graph's shape: it builds each
-node from its module's `make_node` factory (or, for workers, `WorkerSpec.make_node`) and wires them
-together.
+Where the nodes themselves live: each one is its own module under `agents/` (guard.py, recall.py,
+supervisor.py, respond.py, rag_agent.py, remember.py…), so that different tickets can work on
+different nodes in parallel without touching a shared file. This module only draws the graph's shape:
+it builds each node from its module's `make_node` factory (or, for workers, `WorkerSpec.make_node`)
+and wires them together.
+
+`recall` and `remember` (Phase 7, docs/contracts.md § 11) are the owner's long-term memory: `recall`
+loads your saved facts into state before the supervisor decides anything, and `remember` — reached
+only once a worker has answered and the turn is otherwise done — looks at the message you just typed
+for anything durable worth saving. Neither is a worker: like `approval`, they're never in `WORKERS`,
+so the model can't route to them, only the graph's own wiring sends a turn there.
 """
 
 import time
@@ -65,11 +71,12 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from artlab.agents import guard, supervisor
+from artlab.agents import guard, recall, remember, supervisor
 from artlab.agents.common import ms_since
 from artlab.agents.state import ChatState
 from artlab.agents.workers import WORKERS, WorkerSpec
 from artlab.guards.classifier import InjectionClassifier
+from artlab.memory.store import MemoryStore
 from artlab.tools.registry import ToolRegistry
 
 
@@ -134,6 +141,7 @@ def build_graph(
     model: BaseChatModel,
     checkpointer: BaseCheckpointSaver,
     tools: ToolRegistry,
+    memory: MemoryStore,
     workers: tuple[WorkerSpec, ...] = WORKERS,
     classifier: InjectionClassifier | None = None,
 ):
@@ -144,6 +152,9 @@ def build_graph(
         checkpointer: where state is saved between steps and between messages. The real app uses
                       SQLite (data/artlab.db); tests use an in-memory one.
         tools:        the tool registry (tools/catalog.py). Workers search through it.
+        memory:       the long-term memory store (Phase 7, docs/contracts.md § 11) `recall` and
+                      `remember` use. The real app opens data/chroma/; tests pass a temp one — always
+                      isolated, the same way `tools`/`checkpointer` never default to something real.
         workers:      the worker registry (agents/workers.py). Defaults to every real worker; tests
                       can pass their own stub `WorkerSpec`s instead.
         classifier:   the guard's layer-2 injection classifier (docs/contracts.md § 8). None (the
@@ -161,17 +172,22 @@ def build_graph(
 
     # Wire the nodes together. `guard` and `supervisor` have no fixed outgoing edges: their Commands'
     # `goto` decides. `destinations` doesn't change that — it only tells LangGraph (for graph
-    # drawings) which nodes the supervisor *can* jump to: any worker, "approval", or the end. Workers
-    # always report back to the supervisor. `approval` (Phase 6) is not a worker — it's never in
-    # `workers`, so it's not a route the model can pick, only something the supervisor's own code
-    # sends a turn to — and it always ends the turn itself (its edge goes straight to END, never back
-    # to the supervisor: pending_approval is already cleared by the time it does). Compiling with a
+    # drawings) which nodes the supervisor *can* jump to: any worker, "approval", "remember", or the
+    # end. Workers always report back to the supervisor. `approval` and `remember` (Phase 6 and 7) are
+    # not workers — neither is ever in `workers`, so neither is a route the model can pick, only
+    # something the supervisor's own code sends a turn to — and both always end the turn themselves
+    # (their edges go straight to END, never back to the supervisor). `recall` sits between the guard
+    # and the supervisor on every turn, so it has one fixed edge, not a `Command`. Compiling with a
     # checkpointer turns on saving: each run is saved under the `thread_id` api.py passes in (one
     # thread = one chat), which is also what makes `interrupt()`/resume possible — see the file header.
     graph = StateGraph(ChatState)
     graph.add_node("guard", guard.make_node(classifier))
-    graph.add_node("supervisor", supervisor.make_node(model, workers), destinations=(*names, "approval", END))
+    graph.add_node("recall", recall.make_node(memory))
+    graph.add_node("supervisor", supervisor.make_node(model, workers), destinations=(*names, "approval", "remember", END))
+    graph.add_node("remember", remember.make_node(model, memory))
     graph.add_node("approval", _make_approval_node(tools))
+    graph.add_edge("recall", "supervisor")
+    graph.add_edge("remember", END)
     graph.add_edge("approval", END)
     for worker in workers:
         graph.add_node(worker.name, worker.make_node(model, tools))

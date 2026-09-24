@@ -27,6 +27,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from artlab.agents.workers import WORKERS
 from artlab.api import create_app
 from artlab.graph import build_graph
+from artlab.memory.store import MemoryStore
 from artlab.model import fake_model
 from artlab.rag.ingest import ingest
 from artlab.rag.knowledge import KnowledgeBase
@@ -65,6 +66,12 @@ def empty_kb(tmp_path) -> KnowledgeBase:
     return KnowledgeBase(tmp_path / "chroma", embeddings=DeterministicFakeEmbedding(size=32), min_score=-1)
 
 
+def empty_memory(tmp_path) -> MemoryStore:
+    """A private, temp-folder memory store with instant fake embeddings (Phase 7, M1) — every real
+    graph needs one now that `recall`/`remember` are permanent nodes."""
+    return MemoryStore(tmp_path / "chroma-memory", embeddings=DeterministicFakeEmbedding(size=32))
+
+
 def is_tainted(client: TestClient, app, thread_id: str) -> bool:
     """Whether a chat is tainted right now, read straight from the graph's saved state — the same
     pattern test_api.py's `test_a_cited_answer_taints_the_chat_and_it_stays_tainted` uses.
@@ -77,7 +84,9 @@ def is_tainted(client: TestClient, app, thread_id: str) -> bool:
 def client(tmp_path):
     """A test client with an empty knowledge base and the default fake model — the same fixture shape
     test_api.py uses, for the tests below that don't need any real documents."""
-    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path))
+    app = create_app(
+        model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path), memory=empty_memory(tmp_path)
+    )
     with TestClient(app) as c:
         yield c
 
@@ -88,7 +97,9 @@ def test_trending_question_routes_to_youtube_researcher_and_taints_the_chat(tmp_
     answer with real streamed text. The stub's output is untrusted by default, so the chat ends up
     tainted even though nothing in the message itself was suspicious — this is what will keep
     data-changing tools locked in this chat later (docs/contracts.md § 1)."""
-    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path))
+    app = create_app(
+        model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path), memory=empty_memory(tmp_path)
+    )
     with TestClient(app) as client:
         events = send(client, "What's trending in desk-setup videos?")
         lines = trace_lines(events)
@@ -106,7 +117,9 @@ def test_fix_grammar_request_routes_to_english_coach_with_no_tools_and_no_taint(
     """S4: "Fix the grammar: me and him goes to shoot video tomorrow." must route to english_coach.
     english_coach has no tools (docs/contracts.md § 9's table), so the turn is exactly one model call:
     no `tool` trace line at all, and the chat stays untainted — nothing untrusted was read this turn."""
-    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path))
+    app = create_app(
+        model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path), memory=empty_memory(tmp_path)
+    )
     with TestClient(app) as client:
         events = send(client, "Fix the grammar: me and him goes to shoot video tomorrow.")
         lines = trace_lines(events)
@@ -147,7 +160,7 @@ def test_sponsorship_policy_question_still_routes_to_rag_agent(tmp_path):
     doc.write_text("# Sponsorship policy\n\n## Disclosure\n\nDisclose every sponsorship out loud.")
     kb = empty_kb(tmp_path)
     ingest([doc], kb)
-    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=kb)
+    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=kb, memory=empty_memory(tmp_path))
     with TestClient(app) as client:
         events = send(client, "What equipment sponsorships do we accept?")
         lines = trace_lines(events)
@@ -163,7 +176,10 @@ def test_get_agents_lists_every_phase5_worker_with_its_real_tools(tmp_path):
     Updated for Phase 6 (docs/contracts.md § 10): content_ideator used to have no tools at all — it
     now has save_ideas, so this checks its tier shows as "changes data" instead of asserting an empty
     list."""
-    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path), ideas_dir=tmp_path / "ideas")
+    app = create_app(
+        model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path),
+        ideas_dir=tmp_path / "ideas", memory=empty_memory(tmp_path),
+    )
     with TestClient(app) as client:
         body = client.get("/api/agents").json()
 
@@ -182,14 +198,14 @@ def test_get_agents_lists_every_phase5_worker_with_its_real_tools(tmp_path):
     assert coach["tools"] == []
 
 
-def test_fake_router_never_picks_a_route_the_schema_disallows():
+def test_fake_router_never_picks_a_route_the_schema_disallows(tmp_path):
     """T10's schema guard (model.py, `_pick_route`/`_allowed_routes`): the fake router must never hand
     back a `next` value the bound RouteDecision schema doesn't actually accept. Here the graph is built
     with only "respond" registered, so english_coach isn't a valid route even though its keyword hint
     (grammar) fires first — the fake must fall through every later hint too and land on "respond",
     the only route this graph's schema allows, exactly like `workers=` stubs in test_supervisor.py."""
     respond_spec = next(w for w in WORKERS if w.name == "respond")
-    graph = build_graph(fake_model(), InMemorySaver(), ToolRegistry(), workers=(respond_spec,))
+    graph = build_graph(fake_model(), InMemorySaver(), ToolRegistry(), empty_memory(tmp_path), workers=(respond_spec,))
     config = {"configurable": {"thread_id": "t"}}
 
     state = asyncio.run(graph.ainvoke(

@@ -17,6 +17,7 @@ from artlab.agents.capabilities import ARTY_DESCRIPTION, ARTY_NAME, describe_tea
 from artlab.agents.workers import WORKERS, WorkerSpec
 from artlab.api import create_app
 from artlab.graph import build_graph
+from artlab.memory.store import MemoryStore
 from artlab.model import FakeChatModel, fake_model
 from artlab.rag.knowledge import KnowledgeBase
 from artlab.tools.catalog import build_tools
@@ -27,6 +28,12 @@ def empty_kb(tmp_path) -> KnowledgeBase:
     """An empty knowledge base with instant fake embeddings — just enough to build the real tool
     registry (`build_tools`), the same helper `test_api.py` uses."""
     return KnowledgeBase(tmp_path / "chroma", embeddings=DeterministicFakeEmbedding(size=32), min_score=-1)
+
+
+def empty_memory(tmp_path) -> MemoryStore:
+    """A private, temp-folder memory store with instant fake embeddings (Phase 7, M1) — every real
+    graph needs one now that `recall`/`remember` are permanent nodes."""
+    return MemoryStore(tmp_path / "chroma-memory", embeddings=DeterministicFakeEmbedding(size=32))
 
 
 def test_team_lists_arty_first_then_rag_agent_with_its_read_only_tool(tmp_path):
@@ -71,7 +78,7 @@ def test_a_tool_registered_for_a_new_agent_shows_up_with_no_code_change():
     }]
 
 
-def test_respond_system_prompt_contains_the_team_text():
+def test_respond_system_prompt_contains_the_team_text(tmp_path):
     """Arty's own system prompt must carry the exact text `describe_team` builds, so "what can you do"
     / "what tools do you have" answers come from the real registries, never an invented list.
 
@@ -91,17 +98,22 @@ def test_respond_system_prompt_contains_the_team_text():
     spy = SpyModel()
     tools = ToolRegistry()  # empty registry: describe_team should still list every non-respond worker
     respond_spec = next(w for w in WORKERS if w.name == "respond")
-    graph = build_graph(spy, InMemorySaver(), tools, workers=(respond_spec,))
+    graph = build_graph(spy, InMemorySaver(), tools, empty_memory(tmp_path), workers=(respond_spec,))
 
     asyncio.run(graph.ainvoke({"messages": [HumanMessage("what can you do?")]}, {"configurable": {"thread_id": "t"}}))
 
-    assert describe_team(WORKERS, tools) in spy.prompts[-1]
+    # Not spy.prompts[-1]: this message is long enough that `remember` also calls the model (Phase 7,
+    # docs/contracts.md § 11), and its own prompt (messages[0] there is the extraction prompt, not
+    # respond's) would otherwise be the last one recorded.
+    assert any(describe_team(WORKERS, tools) in prompt for prompt in spy.prompts)
 
 
 def test_get_agents_returns_the_team(tmp_path):
     """GET /api/agents (the frontend's Team panel) returns the same list `team` builds, sourced from
     the real tool registry the app builds in its lifespan and stores on app.state.tools."""
-    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path))
+    app = create_app(
+        model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path), memory=empty_memory(tmp_path)
+    )
     with TestClient(app) as client:
         response = client.get("/api/agents")
 

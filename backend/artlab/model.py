@@ -55,6 +55,12 @@ YOUTUBE_RESEARCHER_HINTS = re.compile(
 )
 CONTENT_IDEATOR_HINTS = re.compile(r"\b(ideas?|hooks?|outline|brainstorm)\b", re.IGNORECASE)
 
+# Phase 7 (M1, docs/contracts.md § 11): the fake `remember` extractor's whole "understanding" of a
+# message — a stand-in for a real model reading the sentence and deciding what's durable. Catches
+# "my niche is budget desk gear" -> key "niche", value "budget desk gear"; a message with no "my X is
+# Y" shape yields no facts at all, same as a real model finding nothing worth remembering.
+FACTS_PATTERN = re.compile(r"\bmy (\w+(?: \w+)?) is ([^.,!?]+)", re.IGNORECASE)
+
 # Phase 6 (docs/contracts.md § 10): which of `run_tool_loop`'s tools the fake model only calls when the
 # task actually mentions it — everything else keeps § 9's old "always call the first tool" behaviour.
 # Without this, content_ideator's save_ideas (its only tool so far) would get "called" on every single
@@ -142,6 +148,10 @@ class FakeChatModel(BaseChatModel):
       rag_agent retry  when asked for a Rephrase (structured output, after a first search found
                        nothing), it rewords the question by appending " policy" — deterministic, and
                        different enough from the original to plausibly match a second time
+      remember         when asked for Facts (structured output, docs/contracts.md § 11), it runs
+                       FACTS_PATTERN over the message: a match gives exactly one fact (key = the words
+                       before "is", spaces turned to underscores; value = the rest, stripped); no
+                       match gives an empty list, same as a real model finding nothing to remember
       tool loop        when bound to a *real* tool list (docs/contracts.md § 9, run_tool_loop): it
                        calls the first tool, then answers quoting its result — see `_reply_with_tools`.
                        From Phase 6, a tool named in FAKE_TOOL_HINTS is only called when the task
@@ -214,6 +224,12 @@ class FakeChatModel(BaseChatModel):
         if self.tool_name == "Rephrase":
             question = next(m.content for m in reversed(messages) if isinstance(m, HumanMessage))
             args = {"query": f"{question} policy"}
+            return AIMessage("", tool_calls=[{"name": self.tool_name, "args": args, "id": "fake-call", "type": "tool_call"}])
+        if self.tool_name == "Facts":
+            text = next(m.content for m in reversed(messages) if isinstance(m, HumanMessage))
+            match = FACTS_PATTERN.search(text)
+            facts = [{"key": match.group(1).strip().lower().replace(" ", "_"), "value": match.group(2).strip()}] if match else []
+            args = {"facts": facts}
             return AIMessage("", tool_calls=[{"name": self.tool_name, "args": args, "id": "fake-call", "type": "tool_call"}])
         if self.tool_name:
             raise ValueError(f"the fake model can't fill in {self.tool_name}")
