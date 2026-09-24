@@ -1,0 +1,44 @@
+# Golden evals for the content_ideator agent.
+#
+# This agent generates video ideas, hooks, and outlines tailored to the creator's niche and audience.
+# Each entry captures an ideation request and the quality bar for the response.
+#
+# Shape: [{input, checks}]. Input is the creator's prompt (e.g., "Give me 3 video ideas").
+# Checks are plain-language assertions about what a good response must include.
+#
+# Used by Phase 11 paid evals to grade ideator output.
+
+- input: Give me three video ideas for desk-setup tutorials.
+  checks:
+    - Provides exactly 3 distinct video ideas
+    - Each idea includes a title, a one-line hook, and a 2–3 sentence outline
+    - Ideas are specific to desk setups (not generic furniture advice)
+    - Each idea targets a clear audience segment (e.g., remote workers, artists, gamers)
+
+- input: Create 5 hooks for the first 5 seconds of a product-review video.
+  checks:
+    - Generates exactly 5 distinct hook formulas (e.g., problem hook, counter-intuitive flip)
+    - Each hook includes the formula name, pattern, and one concrete example about a product
+    - Examples are relevant to product reviews (not unrelated niches)
+    - At least 2 hooks avoid clickbait and can be delivered on
+
+- input: I want to make a video about affordable art tablets. Outline it for me.
+  checks:
+    - Provides a complete video outline with intro, sections, and outro
+    - Outline includes estimated time for each section (e.g., intro: 30 seconds)
+    - Suggests 1–2 hooks or retention tactics for the intro and each major section
+    - Includes a clear call-to-action or takeaway at the end
+
+- input: Brainstorm 10 micro-content ideas (60 seconds or less) from my latest long video.
+  checks:
+    - Generates exactly 10 distinct micro-content ideas
+    - Each idea is 60 seconds or shorter and stands alone (not just a clip)
+    - Ideas repurpose key moments, tips, or moments from a long-form video
+    - At least 5 ideas include a suggested hook or opening line
+
+- input: Give me three video ideas that address the top complaint from last month's comments.
+  checks:
+    - Accepts reference to a past complaint (even if not provided in detail)
+    - Provides exactly 3 distinct video ideas that address the complaint
+    - Each idea explains how it answers the complaint (e.g., "This video shows the fix")
+    - Ideas are practical and can be produced within a reasonable timeframe

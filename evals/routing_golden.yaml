@@ -1,0 +1,67 @@
+# Golden routing cases for the studio assistant.
+#
+# Each entry: a message from a creator, the correct route, and a brief explanation of why.
+# Routes: respond (small talk, general knowledge), rag_agent (studio policies), youtube_researcher (trends/comments),
+# content_ideator (video ideas/hooks), english_coach (grammar/polish).
+#
+# Used by backend/tests/test_eval_sets.py to ensure every case routes correctly.
+
+- message: "Hi, what can you do for me?"
+  route: respond
+  why: "Asking about assistant capabilities is small talk, not a skill request"
+
+- message: "Tell me a joke about video creators"
+  route: respond
+  why: "Entertainment request; no specific skill needed"
+
+- message: "What's the weather like in Berlin?"
+  route: respond
+  why: "General knowledge question unrelated to content creation or studio policies"
+
+- message: "What equipment sponsorships do we accept?"
+  route: rag_agent
+  why: "Studio policies are in the knowledge base (sponsorship-policy.md)"
+
+- message: "How many chapter markers does my video need?"
+  route: rag_agent
+  why: "Upload requirements are in the knowledge base (upload-checklist.md)"
+
+- message: "What time should I publish long videos?"
+  route: rag_agent
+  why: "Publishing schedule is a studio policy in the knowledge base (upload-checklist.md)"
+
+- message: "I need creative ideas for a desk-setup video"
+  route: content_ideator
+  why: "Mentioning ideas could be tricky, but paired with creative and for a video it is clearly about ideation, not research"
+
+- message: "What's trending in desk-setup videos right now?"
+  route: youtube_researcher
+  why: "Needs fresh trend data from YouTube analytics and comment analysis"
+
+- message: "Why are viewers leaving my tutorial video at the 2-minute mark?"
+  route: youtube_researcher
+  why: "Requires retention analysis and comment mining to diagnose viewer drop-off"
+
+- message: "Show me 5 hook formulas for product-review intros"
+  route: content_ideator
+  why: "Requesting structured hooks and patterns for video openings"
+
+- message: "Fix the grammar in this script: Me and my team is going to shoot tomorrow"
+  route: english_coach
+  why: "Explicit grammar error to fix (me/my team/is agreement)"
+
+- message: "Rephrase this to sound more friendly: The equipment purchase was not approved by the budget committee"
+  route: english_coach
+  why: "Tone polishing and rephrasing, even though it mentions approval"
+
+- message: "Which desk setups perform best with my audience?"
+  route: youtube_researcher
+  why: "Tricky: sounds like ideation, but which perform best requires trend/comment analysis to answer"
+
+- message: "Give me three video outlines with hooks for tomorrow's upload"
+  route: content_ideator
+  why: "Requesting outlines and hooks; creator is not asking for research or policy"
+
+- message: "Polish this for a YouTube title: This is a guide to desk ergonomics for creators who work long hours and get back pain"
+  route: english_coach
+  why: "Text editing and condensing for platform requirements"
