@@ -57,12 +57,13 @@ INJECTION_RULES: dict[str, re.Pattern[str]] = {
     # "your" (optionally "all your") keeps the rule aimed at "disable the assistant's own defences" and
     # out of everyday requests that just share some words with it.
     #
-    # Listed first: "bypass your filters" also matches ignore-instructions below (same verb, same
-    # target word) — checking this rule first means it's reported under its own, more specific name.
+    # Not targets on purpose: "filters" and "limits". In an art/photo studio "remove your filters" (from
+    # a photo) or "remove your limits" (a motivational title) are ordinary requests, and this rule blocks
+    # outright. "bypass your filters" is still caught by ignore-instructions below.
     "disable-safety": re.compile(
         r"\b(delete|disable|remove|turn\s+off|switch\s+off|shut\s+off|bypass|deactivate|get\s+rid\s+of|drop)\b"
         r"(?:\s+\w+){0,2}\s+(?:all\s+)?your\b\s+"
-        r"(security|safety|guardrails|guards|guard|rules|filters|restrictions|protections|limits)\b",
+        r"(security|safety|guardrails|guards|guard|rules|restrictions|protections)\b",
         re.IGNORECASE,
     ),
     # Catches:  "ignore all previous instructions", "disregard your rules",
