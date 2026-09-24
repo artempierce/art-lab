@@ -16,7 +16,7 @@ long-lived HTTP response made of small text blocks, each one looking like
     data: {"text": "Hello"}
     <blank line>
 
-The browser reads them one by one as they arrive (frontend/src/api.ts → streamChat). Six event
+The browser reads them one by one as they arrive (frontend/src/api.ts → streamChat). Seven event
 types exist; `start` is always first, `done` always last, and `approval` (Phase 6, docs/contracts.md
 § 10) replaces `token` when the run stops to wait for your click instead of finishing:
 
@@ -25,6 +25,11 @@ types exist; `start` is always first, `done` always last, and `approval` (Phase 
     token      → a piece of the answer text                                      (many)
     approval   → a data-changing tool is waiting for Approve/Reject: {id, agent, tool, args,
                  tainted, taint_sources}                                         (instead of more tokens)
+    replace    → the output guard (Phase 10, docs/contracts.md § 14) redacted something this turn:
+                 {text} is this turn's WHOLE answer, after redaction, joined the same way the
+                 `token` events were. The browser should replace the reply bubble's text outright
+                 (not append) — the tokens already shown may have included the leaked prompt or the
+                 raw tag before the guard caught it, so only a full swap is safe    (before done, sometimes)
     done       → tokens used, cost, duration, the answer's sources                (once, at the end)
     error      → what went wrong                                        (instead of done, if something failed)
 
@@ -117,6 +122,12 @@ async def stream_run(graph, run_input, config: dict, started: float):
         started: `time.perf_counter()` reading from just before this call, for the `done` event's `ms`
     """
     tokens_in = tokens_out = 0
+    # Set when a "custom" chunk is the OUTPUT guard's own trace line (its detail always starts with
+    # "output", set in guards/output.py) and its status is "blocked" — i.e. it actually redacted
+    # something this turn, not just warned. The output guard always runs last among "guard"-stage
+    # lines in a completed turn (the input guard's own line, if any, comes first), so by the time the
+    # loop below ends this holds exactly what the LAST such line said. Phase 10, docs/contracts.md § 14.
+    output_redacted = False
     try:
         # Run the graph with two stream modes at once. Each item is (mode, chunk):
         #   "custom"   → a dict a node wrote with get_stream_writer()  → forward as `trace`
@@ -129,6 +140,8 @@ async def stream_run(graph, run_input, config: dict, started: float):
                 # Keep a running token total for the `done` summary.
                 tokens_in += chunk.get("input_tokens", 0)
                 tokens_out += chunk.get("output_tokens", 0)
+                if chunk.get("stage") == "guard" and chunk.get("detail", "").startswith("output"):
+                    output_redacted = chunk.get("status") == "blocked"
                 yield sse("trace", chunk)
             else:
                 message, meta = chunk
@@ -165,6 +178,17 @@ async def stream_run(graph, run_input, config: dict, started: float):
     # The final answer is the last message; rag_agent attached its sources to it.
     last = state.values["messages"][-1]
     done["sources"] = last.additional_kwargs.get("sources", []) if last.type == "ai" else []
+
+    if output_redacted:
+        # The output guard changed at least one of this turn's messages (docs/contracts.md § 14):
+        # rebuild the turn's whole answer from the now-redacted state — every AIMessage after the
+        # last message you sent, joined with no separator, the same way their streamed `token` text
+        # was joined into one reply bubble — and tell the browser to swap the bubble's text for it.
+        messages = state.values["messages"]
+        turn_start = max(i for i, m in enumerate(messages) if m.type == "human") + 1
+        redacted_answer = "".join(text_of(m) for m in messages[turn_start:] if m.type == "ai")
+        yield sse("replace", {"text": redacted_answer})
+
     yield sse("done", done)
 
 

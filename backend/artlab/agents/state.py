@@ -69,8 +69,16 @@ class ChatState(MessagesState):
     artifacts        `{kind, agent, text, tainted}` for each plan step finished so far this turn — the
                      answer each worker produced, handed to the next step as its input
                      (docs/contracts.md § 13). Plain overwrite; the guard resets it to `[]` too.
+    turn_started_at  `time.time()` when this turn began, set by the guard every turn (Phase 10,
+                     docs/contracts.md § 14). `guards/caps.py` compares against this to know when the
+                     turn's MAX_TURN_SECONDS is up. Plain overwrite: last turn's start never matters
+                     once a new one begins.
+    turn_spent_start `spent_usd`'s value at the moment this turn began, set by the guard every turn
+                     alongside `turn_started_at` — `spent_usd` accumulates across the whole chat, so
+                     this is what lets `guards/caps.py` work out how much *this turn* has spent.
+                     Plain overwrite.
 
-    The full contract for these fields: docs/contracts.md §§ 1, 10, 11, 13.
+    The full contract for these fields: docs/contracts.md §§ 1, 10, 11, 13, 14.
     """
 
     spent_usd: Annotated[float, operator.add]
@@ -85,3 +93,5 @@ class ChatState(MessagesState):
     turn_flagged: bool
     plan: list[str]
     artifacts: list[dict]
+    turn_started_at: float
+    turn_spent_start: float

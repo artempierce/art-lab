@@ -16,9 +16,11 @@ this one directly, in the same async context — see tools/registry.py's `_run` 
 
 Depth and the shared cost budget are the *loop's* job, not this file's: `run_tool_loop(..., depth=1)`
 is what refuses a nested `ask_*` request and what folds the nested run's `spent_usd` into the caller's
-own total (agents/tool_loop.py). This file only has to pass the caller's current taint status through —
-which it reads from a contextvar `run_tool_loop` sets for exactly the span of this call (see
-`agents/tool_loop.py`'s module docstring for why a contextvar, not a new tool argument).
+own total (agents/tool_loop.py). This file only has to pass the caller's current taint status, and now
+(Phase 10, docs/contracts.md § 14, ticket G2) its remaining turn budget, through — both read from
+contextvars `run_tool_loop` sets for exactly the span of this call (see `agents/tool_loop.py`'s module
+docstring for why a contextvar, not a new tool argument). Passing the caller's REMAINING budget, not a
+fresh one, is what stops a chain of nested `ask_*` calls from spending more than one turn's cap allows.
 """
 
 from dataclasses import dataclass
@@ -86,7 +88,7 @@ def make_agent_tool(
     `callee`'s own module (e.g. `agents/youtube_researcher.py`, for its PROMPT) is a plain top-level
     import in `tools/catalog.py`, for the same reason: nothing there depends on `tools/` either.
     """
-    from artlab.agents.tool_loop import caller_ctx, run_tool_loop, tainted_in_ctx
+    from artlab.agents.tool_loop import caller_ctx, limits_ctx, run_tool_loop, tainted_in_ctx
 
     async def ask(question: str) -> AgentAnswer:
         """The tool itself: hand `question` to `callee` as a brand-new, standalone turn, and return
@@ -94,14 +96,16 @@ def make_agent_tool(
         tool its allow-list grants *except* another `ask_*` — the depth cap that keeps agents from
         calling agents more than one level deep.
 
-        `tainted_in` and `caller` come from contextvars the *caller's* own `run_tool_loop` set right
-        before awaiting this call (see that module's docstring): this chat's current taint status, and
-        which agent is doing the asking — the latter only for the nested loop's own trace lines
-        ("↳ for content_ideator · …", docs/contracts.md § 13).
+        `tainted_in`, `caller` and `limits` all come from contextvars the *caller's* own
+        `run_tool_loop` set right before awaiting this call (see that module's docstring): this chat's
+        current taint status, which agent is doing the asking (only for the nested loop's own trace
+        lines, "↳ for content_ideator · …", docs/contracts.md § 13), and — Phase 10, docs/contracts.md
+        § 14, ticket G2 — what's left of the turn's time and dollar budget, so the nested loop stops
+        when the CALLER's turn would, not when a fresh budget of its own would.
         """
         result = await run_tool_loop(
             model, tools, callee, prompt, question,
-            tainted_in=tainted_in_ctx.get(), depth=1, caller=caller_ctx.get(),
+            tainted_in=tainted_in_ctx.get(), depth=1, caller=caller_ctx.get(), limits=limits_ctx.get(),
         )
         return AgentAnswer(
             text=str(result.reply.content), spent_usd=result.spent_usd, tainted=result.tainted, callee=callee,
