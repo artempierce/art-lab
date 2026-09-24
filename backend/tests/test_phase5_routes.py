@@ -157,9 +157,13 @@ def test_sponsorship_policy_question_still_routes_to_rag_agent(tmp_path):
 
 def test_get_agents_lists_every_phase5_worker_with_its_real_tools(tmp_path):
     """GET /api/agents (the sidebar's Team panel, X3) must list Arty, rag_agent and the three Phase 5
-    workers, each with its real tools: youtube_researcher gets both YouTube stubs, read-only; the
-    other two have none yet (their tools arrive in later phases, docs/contracts.md § 9's table)."""
-    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path))
+    workers, each with its real tools: youtube_researcher gets both YouTube stubs, read-only;
+    content_ideator gets its Phase 6 save_ideas, mutating; english_coach still has none.
+
+    Updated for Phase 6 (docs/contracts.md § 10): content_ideator used to have no tools at all — it
+    now has save_ideas, so this checks its tier shows as "changes data" instead of asserting an empty
+    list."""
+    app = create_app(model=fake_model(), checkpointer=InMemorySaver(), knowledge=empty_kb(tmp_path), ideas_dir=tmp_path / "ideas")
     with TestClient(app) as client:
         body = client.get("/api/agents").json()
 
@@ -173,7 +177,8 @@ def test_get_agents_lists_every_phase5_worker_with_its_real_tools(tmp_path):
 
     ideator = next(e for e in body if e["name"] == "content_ideator")
     coach = next(e for e in body if e["name"] == "english_coach")
-    assert ideator["tools"] == []
+    assert {t["name"] for t in ideator["tools"]} == {"save_ideas"}
+    assert all(t["tier"] == "changes data" for t in ideator["tools"])
     assert coach["tools"] == []
 
 

@@ -55,6 +55,12 @@ YOUTUBE_RESEARCHER_HINTS = re.compile(
 )
 CONTENT_IDEATOR_HINTS = re.compile(r"\b(ideas?|hooks?|outline|brainstorm)\b", re.IGNORECASE)
 
+# Phase 6 (docs/contracts.md § 10): which of `run_tool_loop`'s tools the fake model only calls when the
+# task actually mentions it — everything else keeps § 9's old "always call the first tool" behaviour.
+# Without this, content_ideator's save_ideas (its only tool so far) would get "called" on every single
+# turn, including "give me 3 ideas", which never asks to save anything.
+FAKE_TOOL_HINTS: dict[str, re.Pattern] = {"save_ideas": re.compile(r"\bsave\b", re.IGNORECASE)}
+
 # The fake router's whole decision table, checked top to bottom (docs/contracts.md § 9, T10): the
 # first pattern that matches the question *and* whose route is actually allowed by the schema wins.
 # `_pick_route` falls through to "respond" if nothing matches (or nothing matching is allowed).
@@ -137,7 +143,9 @@ class FakeChatModel(BaseChatModel):
                        nothing), it rewords the question by appending " policy" — deterministic, and
                        different enough from the original to plausibly match a second time
       tool loop        when bound to a *real* tool list (docs/contracts.md § 9, run_tool_loop): it
-                       calls the first tool, then answers quoting its result — see `_reply_with_tools`
+                       calls the first tool, then answers quoting its result — see `_reply_with_tools`.
+                       From Phase 6, a tool named in FAKE_TOOL_HINTS is only called when the task
+                       mentions it (§ 10) — otherwise it answers directly, like a tool-less worker
       respond          otherwise, it answers with the next of `replies`, in a loop
 
     How structured output works (and why `bind_tools` is here): LangChain's `with_structured_output(Schema)`
@@ -178,6 +186,10 @@ class FakeChatModel(BaseChatModel):
         the *first* bound tool, filling every required string argument with the task text (the last
         `HumanMessage`): the fake doesn't know what a good argument looks like, but this is deterministic
         and drives `run_tool_loop` through one real tool call before it answers.
+
+        Phase 6 exception (FAKE_TOOL_HINTS, docs/contracts.md § 10): if that first tool's name is in
+        FAKE_TOOL_HINTS, it's only called when its hint pattern matches the task — otherwise this
+        behaves exactly as if no tools were bound, and the model just answers with `replies`.
         """
         if messages and isinstance(messages[-1], ToolMessage):
             start = str(messages[-1].content)[:200]
@@ -185,6 +197,9 @@ class FakeChatModel(BaseChatModel):
 
         task = next(m.content for m in reversed(messages) if isinstance(m, HumanMessage))
         spec = self.tool_specs[0]["function"]
+        hint = FAKE_TOOL_HINTS.get(spec["name"])
+        if hint is not None and not hint.search(task):
+            return AIMessage(self.replies[next(self._turn) % len(self.replies)])
         params = spec["parameters"]
         args = {n: task for n in params.get("required", []) if params["properties"][n].get("type") == "string"}
         return AIMessage("", tool_calls=[{"name": spec["name"], "args": args, "id": "fake-call", "type": "tool_call"}])

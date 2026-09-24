@@ -250,17 +250,27 @@ def test_bad_arguments_are_caught_without_running_the_tool():
     assert tool_traces[0]["status"] == "error"
 
 
-def test_a_mutating_tool_is_refused_once_the_same_loop_read_untrusted_content():
+def test_a_mutating_tool_still_waits_for_approval_once_the_same_loop_read_untrusted_content():
     """Taint is sticky within one loop, not just across turns (docs/contracts.md § 1): a data-changing
-    tool asked for right after an untrusted result, in the *same* run_tool_loop call, must still be
-    refused — otherwise a single crafted turn could read a poisoned tool result and immediately act on
-    it, without ever reaching the chat-wide `tainted` flag."""
+    tool asked for right after an untrusted result, in the *same* run_tool_loop call, still needs to go
+    through approval, carrying `tainted=True` on its card — otherwise a single crafted turn could read
+    a poisoned tool result and immediately act on it, without ever reaching the chat-wide `tainted` flag
+    or surfacing the risk to the owner.
+
+    Updated for Phase 6 (docs/contracts.md § 10): before approvals existed, a tainted mutating request
+    was refused outright ("read untrusted content"). Now it stops the loop for your Approve/Reject
+    click instead, the same as an untainted mutating request — `pending["tainted"]` is what carries the
+    warning through to the approval card."""
     tools = registry(search=lambda query: f"found {query}", save=(lambda text: "saved", "mutating"))
     result, traces = run_loop(SearchThenSaveModel(), tools, "test_agent", "hello", tainted_in=False)
 
     assert result.tainted is True
-    assert result.tool_calls == 1  # only "search" actually ran; "save" was refused
-    assert "refused" in result.reply.content and "read untrusted content" in result.reply.content
+    assert result.tool_calls == 1  # only "search" actually ran; "save" stopped the loop for approval
+    assert "waiting for your approval" in result.reply.content
+    assert result.pending is not None
+    assert result.pending["tool"] == "save" and result.pending["tainted"] is True
+    approval_traces = [t for t in traces if t["stage"] == "tool" and t["status"] == "approval"]
+    assert len(approval_traces) == 1 and "save" in approval_traces[0]["detail"]
 
 
 def test_specs_for_hides_defaults_and_only_lists_allowed_tools():

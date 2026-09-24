@@ -9,7 +9,7 @@ import asyncio
 
 import pytest
 
-from artlab.tools.registry import ToolDenied, ToolRegistry
+from artlab.tools.registry import ApprovalRequired, ToolDenied, ToolRegistry
 from artlab.tools.untrusted import Piece, wrap_untrusted
 
 
@@ -66,17 +66,28 @@ def test_unknown_tool_is_refused(tools):
         call(tools, "rag_agent", "delete_everything")
 
 
-def test_mutating_tools_are_refused_until_approval_exists(tools):
-    """Even an allowed agent can't run a data-changing tool: that needs your Approve click (Phase 6).
-    The tier is fixed at registration, so the caller can't claim it's read-only (manifest bug #2)."""
-    with pytest.raises(ToolDenied, match="needs your approval"):
+def test_mutating_tools_always_need_approval(tools):
+    """Even an allowed agent can't run a data-changing tool directly: `check` raises the more specific
+    `ApprovalRequired` (a `ToolDenied` subclass) — that needs your Approve click (Phase 6,
+    docs/contracts.md § 10), never runs from a model's request. The tier is fixed at registration, so
+    the caller can't claim it's read-only (manifest bug #2).
+
+    Updated for Phase 6: before approvals existed, this raised a plain `ToolDenied` saying the tool
+    "needs your approval, which arrives in Phase 6" — now that Phase 6 exists, it's the real thing."""
+    with pytest.raises(ApprovalRequired, match="needs your approval"):
         call(tools, "rag_agent", "save", text="x")
 
 
-def test_a_tainted_chat_can_never_run_mutating_tools(tools):
-    """Once untrusted content is in the chat, data-changing tools are refused whatever the model asks
-    (the lethal-trifecta rule). Phase 6's approvals will not lift this."""
-    with pytest.raises(ToolDenied, match="read untrusted content"):
+def test_a_tainted_chat_still_only_needs_approval_not_a_harder_refusal(tools):
+    """Before Phase 6, a tainted chat refused a mutating tool outright (the lethal-trifecta rule) with
+    no way to ever run it. From Phase 6 (docs/contracts.md § 10) that outright refusal is *replaced* by
+    the same approval gate, tainted or not — a human in the loop is exactly what the rule wanted, and
+    `check` no longer branches on `tainted` at all. (The tainted flag still reaches the approval card,
+    via the tool loop's `pending` — just not this exception's message.)
+
+    Updated for Phase 6: this used to expect a ToolDenied whose message said "read untrusted content";
+    that message is gone, and this now protects that the outcome is approval, not a harder refusal."""
+    with pytest.raises(ApprovalRequired, match="needs your approval"):
         call(tools, "rag_agent", "save", tainted=True, text="x")
 
 

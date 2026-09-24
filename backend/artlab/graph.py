@@ -7,7 +7,19 @@ chat's messages, what it has spent, and this turn's routing notes), returns the 
 change, and LangGraph merges those changes in. A *checkpointer* saves the state after every node, so
 a chat can be resumed later, even after a server restart.
 
-The graph today (Phase 3 — supervisor v2):
+What `interrupt()` and `Command(resume=...)` are (first used here, by the `approval` node, Phase 6 —
+docs/contracts.md § 10): `interrupt(payload)` pauses the *node* it's called in and saves the graph's
+state right there — `payload` is whatever you want the caller to see while it's waiting (here: the
+tool the owner is being asked to approve). `astream`/`ainvoke` simply stop, as if the run had ended.
+Later, calling `astream(Command(resume=some_value), config, ...)` on the *same thread* picks the run
+back up — but by **re-running the paused node from its very first line**, not from the `interrupt()`
+call onward. This time, though, `interrupt(payload)` doesn't pause again: it returns `some_value`
+straight away, and the node continues from there. That's why the `approval` node below reads
+`pending_approval` and calls `interrupt()` as its very first action, before anything else — a second
+run of the same node must never repeat a side effect (like running the tool) that only belongs after
+the resume.
+
+The graph today (Phase 6 — approvals):
 
     START ──▶ guard ──blocked──────────────────────────────────────────▶ END   (refusal, no model call)
                 │
@@ -17,6 +29,7 @@ The graph today (Phase 3 — supervisor v2):
        (main agent, Arty)  ──"rag_agent"─▶ rag_agent ─┤   searches the knowledge base, answers with citations
                 │  ▲                                  │
                 │  └──────────── a worker answered ◀──┘   (or asks to hand off to another worker)
+                ├── a tool needs your click ──▶ approval ──▶ END   (interrupt(); resumes via /api/chat/resume)
                 ├── finish ────────────────────────────────────────────▶ END
                 └── step limit reached (5 dispatches) ──────────────────▶ END  (with a note in the answer)
 
@@ -43,15 +56,78 @@ node from its module's `make_node` factory (or, for workers, `WorkerSpec.make_no
 together.
 """
 
+import time
+
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
 
 from artlab.agents import guard, supervisor
+from artlab.agents.common import ms_since
 from artlab.agents.state import ChatState
 from artlab.agents.workers import WORKERS, WorkerSpec
 from artlab.guards.classifier import InjectionClassifier
 from artlab.tools.registry import ToolRegistry
+
+
+def _make_approval_node(tools: ToolRegistry):
+    """Build the `approval` node (Phase 6, docs/contracts.md § 10) — not a worker: it's never in
+    `WORKERS`, so it's never a route the supervisor's `RouteDecision` can pick; only the supervisor's
+    own code sends a turn here, when `pending_approval` is set.
+
+    Closes over `tools` so it can run the approved call for real (`tools.run_approved` — the one path
+    a mutating tool can actually execute, per tools/registry.py).
+    """
+
+    async def approval(state: ChatState) -> dict:
+        """Pause for your Approve/Reject click, then run (or skip) the tool exactly as recorded.
+
+        Why this is its own node, not a pause inside a worker's tool loop: see the file header for
+        what `interrupt()`/`Command(resume=...)` do. Pausing inside a worker's loop would mean a
+        resume re-runs *that* loop from the top, calling the model again — for possibly different
+        arguments than the ones on the card you approved. This node's whole job is to read the
+        request a worker already recorded (`state["pending_approval"]`) and act on it, so re-running
+        it from the top on resume is harmless: nothing happens before the `interrupt()` call below.
+
+        Steps:
+          1. `interrupt(payload)` — first thing this function does. The first time through, this
+             pauses the run right here (LangGraph saves the state; api.py notices via
+             `aget_state(config).next` and sends the browser an `approval` event with the same
+             payload). On resume, it returns instead of pausing — see the file header.
+          2. `decision` is whatever `Command(resume=...)` was called with: `{"id", "approve"}`. A
+             resume whose `id` doesn't match this request is treated as a reject — a stale card from
+             an old turn, or (api.py) a new message auto-cancelling this one.
+          3. Approve → run the tool for real, through `run_approved` (the only way a mutating tool
+             ever runs — no model call can reach it). Reject → a fixed "nothing was saved" reply.
+          4. Clear `pending_approval` and let the graph's `approval → END` edge finish the turn.
+        """
+        pending = state["pending_approval"]
+        decision = interrupt({
+            "id": pending["id"], "agent": pending["agent"], "tool": pending["tool"],
+            "args": pending["args"], "tainted": pending["tainted"], "taint_sources": pending["taint_sources"],
+        })
+
+        write = get_stream_writer()
+        start = time.perf_counter()
+        approved = bool(decision.get("approve")) and decision.get("id") == pending["id"]
+
+        if approved:
+            result = await tools.run_approved(pending["agent"], pending["tool"], pending["args"])
+            write({
+                "stage": "tool", "status": "ok" if result.ok else "error",
+                "detail": f"{pending['tool']} · approved · {'ok' if result.ok else 'failed'}", "ms": ms_since(start),
+            })
+            reply = AIMessage(result.text)
+        else:
+            write({"stage": "tool", "status": "ok", "detail": f"{pending['tool']} · rejected", "ms": ms_since(start)})
+            reply = AIMessage("OK, nothing was saved.")
+
+        return {"messages": [reply], "pending_approval": None}
+
+    return approval
 
 
 def build_graph(
@@ -85,12 +161,18 @@ def build_graph(
 
     # Wire the nodes together. `guard` and `supervisor` have no fixed outgoing edges: their Commands'
     # `goto` decides. `destinations` doesn't change that — it only tells LangGraph (for graph
-    # drawings) which nodes the supervisor *can* jump to: any worker, or the end. Workers always
-    # report back to the supervisor. Compiling with a checkpointer turns on saving: each run is saved
-    # under the `thread_id` api.py passes in (one thread = one chat).
+    # drawings) which nodes the supervisor *can* jump to: any worker, "approval", or the end. Workers
+    # always report back to the supervisor. `approval` (Phase 6) is not a worker — it's never in
+    # `workers`, so it's not a route the model can pick, only something the supervisor's own code
+    # sends a turn to — and it always ends the turn itself (its edge goes straight to END, never back
+    # to the supervisor: pending_approval is already cleared by the time it does). Compiling with a
+    # checkpointer turns on saving: each run is saved under the `thread_id` api.py passes in (one
+    # thread = one chat), which is also what makes `interrupt()`/resume possible — see the file header.
     graph = StateGraph(ChatState)
     graph.add_node("guard", guard.make_node(classifier))
-    graph.add_node("supervisor", supervisor.make_node(model, workers), destinations=(*names, END))
+    graph.add_node("supervisor", supervisor.make_node(model, workers), destinations=(*names, "approval", END))
+    graph.add_node("approval", _make_approval_node(tools))
+    graph.add_edge("approval", END)
     for worker in workers:
         graph.add_node(worker.name, worker.make_node(model, tools))
         graph.add_edge(worker.name, "supervisor")

@@ -78,12 +78,14 @@ def make_node(classifier: InjectionClassifier | None = None):
             except Exception as exc:
                 detail += f" · classifier failed ({type(exc).__name__}: {exc}) → chat tainted, data-changing tools locked"
                 write({"stage": "guard", "status": "flagged", "detail": detail, "ms": ms_since(start)})
-                return Command(update={**update, "tainted": True}, goto="supervisor")
+                # "guard classifier" (docs/contracts.md § 10) is the source name a later approval card
+                # shows, so you know a flagged message — not a tool result — is why it's asking.
+                return Command(update={**update, "tainted": True, "taint_sources": ["guard classifier"]}, goto="supervisor")
 
             if score >= THRESHOLD:
                 detail += f" · classifier {score:.2f} ≥ {THRESHOLD:.2f} → chat tainted, data-changing tools locked"
                 write({"stage": "guard", "status": "flagged", "detail": detail, "ms": ms_since(start)})
-                return Command(update={**update, "tainted": True}, goto="supervisor")
+                return Command(update={**update, "tainted": True, "taint_sources": ["guard classifier"]}, goto="supervisor")
 
             detail += f" · classifier {score:.2f}"
 
