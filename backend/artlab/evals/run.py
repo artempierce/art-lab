@@ -363,7 +363,7 @@ S_SCENARIOS: tuple[tuple[str, str, str], ...] = (
      "tests/test_supervisor.py::test_hi_is_answered_by_respond_and_rag_agent_never_runs, "
      "tests/test_phase5_routes.py::test_hi_still_routes_to_respond"),
     ("S12", 'Open the Memory page and delete the "niche" fact',
-     "not covered — P12's Memory page and DELETE /api/memory endpoint aren't built yet (parallel ticket)"),
+     "tests/test_memory_api.py::test_s12_deleting_a_fact_through_the_api_removes_it_from_recall"),
     ("S13", '"What\'s our rule for disclosing sponsorships?"',
      "tests/test_api.py::test_knowledge_question_goes_to_rag_agent_with_sources"),
     ("S14", '"What\'s our policy on filming in space?"',
