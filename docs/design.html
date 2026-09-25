@@ -142,7 +142,7 @@ html{scroll-behavior:smooth}
 
 <div class="wrap">
 <header class="top">
-  <span class="eyebrow">art-lab · docs/design.html · updated 2026-09-23</span>
+  <span class="eyebrow">art-lab · docs/design.html · updated 2026-09-24</span>
   <h1>Art Lab Design Book</h1>
   <p class="lede">A small multi-agent web app built to learn production agent patterns — guardrails, routing, tools, human approval, memory, skills and evals — where every step runs for real and shows itself as it happens.</p>
   <div class="status">
@@ -162,7 +162,7 @@ html{scroll-behavior:smooth}
     <span class="pill done">Phase 12 ✓</span>
     <span class="pill done">Phase 13 ✓</span>
     <span class="pill"><b>Next:</b> first paid eval run + real-Claude smoke (needs your OK)</span>
-        <span class="pill done">all 18 decisions resolved</span>
+        <span class="pill done">all decisions resolved (Q1–Q21, D1–D4)</span>
   </div>
 </header>
 </div>
@@ -843,7 +843,7 @@ flowchart LR
       <tr><td class="id">9</td><td>Agent handoffs through artifacts <span class="tag s-tool">done</span></td><td>Research → ideas → polish end to end</td><td class="id">W2 · S2</td></tr>
       <tr><td class="id">9b</td><td>Agent calls agent, generalized (Phase 2 did it once: main agent → rag_agent) <span class="tag s-tool">done</span></td><td>Ideator calls researcher at depth 1</td><td class="id">W10</td></tr>
       <tr><td class="id">10</td><td>Output guard, token and time caps <span class="tag s-tool">done</span></td><td>Cap tests pass</td><td class="id">FR-5 FR-12</td></tr>
-      <tr><td class="id">11</td><td>Paid evals: LLM judge + golden set <span class="tag s-tool">done</span></td><td>All scenarios pass as a gate ✅</td><td class="id">FR-13</td></tr>
+      <tr><td class="id">11</td><td>Paid evals: LLM judge + golden set <span class="tag s-tool">done</span></td><td>All scenarios pass as a gate — runner built and dry-run tested; the paid gate run waits for your OK</td><td class="id">FR-13</td></tr>
       <tr><td class="id">12</td><td>Memory page <span class="tag s-tool">done</span></td><td>See, edit, delete facts ✅</td><td class="id">FR-14 · S12</td></tr>
       <tr><td class="id">13</td><td>Runs page <span class="tag s-tool">done</span></td><td>Cost, steps, eval results per run ✅</td><td class="id">FR-15</td></tr>
     </tbody>
@@ -855,7 +855,7 @@ flowchart LR
   <header>
     <span class="eyebrow">Decisions</span>
     <h2>What's settled and what's open</h2>
-    <p class="muted">All resolved on 2026-09-23.</p>
+    <p class="muted">All resolved; Q1–Q17 on 2026-09-23, Q18–Q21 on 2026-09-24.</p>
   </header>
   <div class="tbl"><table>
     <thead><tr><th>#</th><th>Question</th><th>Answer</th><th>Status</th></tr></thead>
