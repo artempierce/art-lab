@@ -65,6 +65,12 @@ CONTENT_IDEATOR_HINTS = re.compile(r"\b(ideas?|hooks?|outline|brainstorm)\b", re
 # Y" shape yields no facts at all, same as a real model finding nothing worth remembering.
 FACTS_PATTERN = re.compile(r"\bmy (\w+(?: \w+)?) is ([^.,!?]+)", re.IGNORECASE)
 
+# Phase 11 (docs/contracts.md § 15): matches evals/judge.py's `_prompt` exactly — "Answer:\n<answer>\n\n
+# Checks:\n1. <check>\n2. <check>..." — so the fake Verdicts branch below can pull the answer and each
+# numbered check back out of the judge's own human message.
+VERDICTS_PROMPT_PATTERN = re.compile(r"^Answer:\n(.*?)\n\nChecks:\n(.*)$", re.DOTALL)
+CHECK_LINE_PATTERN = re.compile(r"^\d+\.\s*(.+)$", re.MULTILINE)
+
 # Phase 6 (docs/contracts.md § 10): which of `run_tool_loop`'s tools the fake model only calls when the
 # task actually mentions it — a tool with no entry here keeps § 9's old "always call it" behaviour.
 # Without this, content_ideator's save_ideas would get "called" on every single turn, including "give
@@ -169,7 +175,7 @@ def make_model() -> BaseChatModel:
 
 
 class FakeChatModel(BaseChatModel):
-    """A free, predictable stand-in for Claude. It plays five roles:
+    """A free, predictable stand-in for Claude. It plays seven roles:
 
       supervisor       when asked for a RouteDecision (structured output), it picks every matching
                        route from `ROUTE_HINTS` — a crude keyword check, in canonical order:
@@ -192,6 +198,12 @@ class FakeChatModel(BaseChatModel):
                        (FAKE_TOOL_HINTS' plain keyword match, or FAKE_SKILL_HINTS for load_skill,
                        §§ 10, 12), then answers quoting its result — see `_reply_with_tools`. Nothing
                        wants the task → it answers directly, like a tool-less worker
+      judge            when asked for Verdicts (structured output, Phase 11, docs/contracts.md § 15,
+                       evals/judge.py), it reads the judge's own "Answer: ... Checks: 1. ..." prompt
+                       back apart (VERDICTS_PROMPT_PATTERN) and passes each check if any of its own
+                       words (5+ letters — short words like "the" or "with" are too common to mean
+                       anything) shows up in the answer, else fails it — a crude stand-in for a real
+                       judge actually reading the answer for a $0 dry run
       respond          otherwise, it answers with the next of `replies`, in a loop
 
     How structured output works (and why `bind_tools` is here): LangChain's `with_structured_output(Schema)`
@@ -290,6 +302,19 @@ class FakeChatModel(BaseChatModel):
             match = FACTS_PATTERN.search(text)
             facts = [{"key": match.group(1).strip().lower().replace(" ", "_"), "value": match.group(2).strip()}] if match else []
             args = {"facts": facts}
+            return AIMessage("", tool_calls=[{"name": self.tool_name, "args": args, "id": "fake-call", "type": "tool_call"}])
+        if self.tool_name == "Verdicts":
+            prompt = next(m.content for m in reversed(messages) if isinstance(m, HumanMessage))
+            match = VERDICTS_PROMPT_PATTERN.match(str(prompt))
+            answer, checks_block = match.groups() if match else ("", "")
+            checks = CHECK_LINE_PATTERN.findall(checks_block)
+            items = []
+            for check in checks:
+                words = re.findall(r"\b[a-zA-Z]{5,}\b", check)
+                passed = any(word.lower() in answer.lower() for word in words)
+                reason = "fake judge: a check word appears in the answer" if passed else "fake judge: no check word appears in the answer"
+                items.append({"check": check, "passed": passed, "reason": reason})
+            args = {"items": items}
             return AIMessage("", tool_calls=[{"name": self.tool_name, "args": args, "id": "fake-call", "type": "tool_call"}])
         if self.tool_name:
             raise ValueError(f"the fake model can't fill in {self.tool_name}")
