@@ -25,7 +25,7 @@
 - input: I want to make a video about affordable art tablets. Outline it for me.
   checks:
     - Provides a complete video outline with intro, sections, and outro
-    - Outline includes estimated time for each section (e.g., intro: 30 seconds)
+    - "Outline includes estimated time for each section (e.g., intro: 30 seconds)"
     - Suggests 1–2 hooks or retention tactics for the intro and each major section
     - Includes a clear call-to-action or takeaway at the end
 

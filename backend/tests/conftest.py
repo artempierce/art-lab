@@ -16,8 +16,27 @@ the problem, so CI keeps a completely normal shutdown.
 import os
 import sys
 
+import pytest
+
 # pytest's exit status for this run (0 = all passed), captured when the session finishes.
 _exit_status: int | None = None
+
+
+@pytest.fixture(autouse=True)
+def isolated_default_stores(tmp_path, monkeypatch):
+    """Every test gets a private run log and memory store unless it passes its own.
+
+    `create_app(runs=None, memory=None)` means "open the real ones in data/" (the app's own defaults).
+    A test that forgets to pass them would otherwise write rows into your real run log (data/runs.db)
+    and facts into your real long-term memory. This swaps api.py's defaults for temp-folder versions,
+    so forgetting can't leak test data into the real app.
+    """
+    import artlab.api as api
+    from artlab.memory.store import MemoryStore
+    from artlab.runs.store import RunStore
+
+    monkeypatch.setattr(api, "RunStore", lambda *a, **kw: RunStore(*(a or (tmp_path / "runs.db",)), **kw))
+    monkeypatch.setattr(api, "MemoryStore", lambda *a, **kw: MemoryStore(*(a or (tmp_path / "chroma-memory",)), **kw))
 
 
 def pytest_sessionfinish(session, exitstatus):

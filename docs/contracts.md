@@ -591,3 +591,72 @@ entries for `flagged` (⚑), `stopped` (■), `approval` (?) and `blocked` (alre
 
 G1 and G2 both need `output_guard` to exist as a node name. G2 routes its stop paths to `"output_guard"`, and G1 adds the
 node. Until both are merged, G2's tests can pass `workers=` and assert on the Command goto rather than on a full run.
+
+## 15. Phases 11–13: evals, Memory page, Runs page
+
+Sol was away on 2026-09-24 ("continue working, don't ask questions"), so the choices in this section were made by
+Opus, following the design book. Each one is marked **(chosen)** so it's easy to revisit.
+
+### Phase 11: paid evals (P11)
+
+**The runner is built and tested for free; a paid run needs Sol's OK** (CLAUDE.md cost rule). Nothing here runs by itself.
+
+`artlab/evals/run.py` is the CLI: `uv run python -m artlab.evals.run --suite routing|rag|workers|all [--dry-run] [--max-usd 0.50]`.
+- **routing**: the 15 cases in `evals/routing_golden.yaml`. It calls only the supervisor's router (`RouteDecision`) with the
+  message, with no graph run, and scores `next == route` (accuracy; each miss is listed).
+- **rag**: the questions in `evals/rag_golden.yaml` through the full API (TestClient, the real knowledge base, a temp chat
+  store). An answerable question passes when its `fact` appears in the answer (case-insensitive), **and** the judge says
+  every claim is supported by the cited sources. An unanswerable one (`source: null`) passes when the answer is exactly
+  NOT_FOUND.
+- **workers**: each entry in `evals/<worker>_golden.yaml` runs that worker's node directly with `task = input`. A **judge**
+  grades every `checks` line pass/fail with a reason.
+- **Judge (chosen):** the same Haiku model (`MODEL_ID`), with structured output `Verdicts(items: list[Verdict(check, passed,
+  reason)])` and a strict prompt ("grade only what's asked; when unsure, fail"). The judge's text is our own model's output
+  about untrusted content, so it's report data only and never fed back to an agent.
+- **Budget guard:** stop before the next case once the spend passes `--max-usd` (default $0.50, chosen: a full suite is
+  about $0.05–0.10 with Haiku), and say so in the report.
+- **Report:** `evals/reports/<YYYY-MM-DD-HHMM>.md` (human) + `.json` (`{started_at, model, suites: {name: {passed, total,
+  cases: [...]}}, cost_usd, dry_run}`). The reports folder is committed (they're small, and history is the point); a
+  dry-run report goes to a temp dir instead.
+- `--dry-run`: fake model + a fake judge (it passes every check it can find in the answer, otherwise fails), $0. Used by the tests
+  and CI to prove the plumbing works.
+- Scenario gate (design book "All scenarios pass as a gate"): the report ends with the S-scenario checklist that the free
+  tests already cover (S0–S16 → the test that covers each), so the gate reads in one place.
+
+### Phase 12: Memory page (P12)
+
+- API: `GET /api/memory` → `[{key, value, created_at, thread_id}]` (newest first); `PUT /api/memory/{key}` `{value}` →
+  edit (the store's normalisation and caps apply); `DELETE /api/memory/{key}` → 204 (404 if missing). Edits come from the
+  owner's own browser on localhost, so they're trusted, like the owner's own messages (§ 11).
+- **Navigation (chosen):** App gets a `view` state, `"chat" | "memory" | "runs"`. The sidebar's "Coming later"
+  placeholders become two nav buttons: **Memory** and **Runs**. P12 builds the nav and the Memory page, and renders a
+  `RunsPage` placeholder that P13 replaces.
+- `MemoryPage.tsx`: a card list of facts; each has the key, the value (inline edit: click → input → Save/Cancel), the date,
+  and a Delete button with a confirm step. An empty state explains that facts come from your own messages.
+- S12: delete "niche" → the next new chat's recall doesn't include it (a test).
+
+### Phase 13: Runs page (P13)
+
+- `runs/store.py`: `RunStore(path=DATA_DIR / "runs.db")` over plain `sqlite3`, called through `asyncio.to_thread`. It's a separate file
+  from the chat checkpointer on purpose (chosen): a run log must never be able to corrupt chat history. Table `runs`:
+  `trace_id PK, thread_id, started_at, prompt (first 200 chars), answered_by, status, input_tokens, output_tokens, cost_usd,
+  ms, steps, trace_json`.
+- `stream_run` records one row per request, at `done` or `error`. status = `error` | `approval` (paused) | `blocked` (the
+  guard refused) | `stopped` (breaker or caps) | `redacted` (the output guard changed something) | `ok`.
+- API: `GET /api/runs?limit=50` (newest first, no trace_json), `GET /api/runs/{trace_id}` (with trace lines),
+  `GET /api/evals/latest` (the newest report's JSON summary from Phase 11, or 404).
+- `RunsPage.tsx`: the latest eval summary on top (or "no eval run yet"); a table of time, prompt, answered by,
+  status, tokens, cost and ms; clicking a row shows its trace, reusing the trace panel's run card (export `RunBlock` from
+  TracePanel.tsx). Each row shows its trace ID with copy (for LangSmith search; a direct LangSmith link needs the org/project
+  IDs, so it's left out, chosen).
+
+### Who owns what (Phases 11–13, in parallel)
+
+| Ticket | Model | Owns |
+|---|---|---|
+| P11 evals runner | Sonnet (Opus review) | `artlab/evals/__init__.py`, `artlab/evals/run.py`, `artlab/evals/judge.py`, `evals/reports/.gitkeep`, `tests/test_evals_runner.py`, `model.py` (a fake `Verdicts` branch only) |
+| P12 Memory page | Sonnet | `api.py` (memory endpoints only), `memory/store.py` (an `update` if needed), `frontend/src/{api.ts,App.tsx}`, `frontend/src/components/{Sidebar.tsx,MemoryPage.tsx}`, a placeholder `RunsPage.tsx`, `tests/test_memory_api.py` |
+| P13 Runs page | Sonnet | `runs/__init__.py`, `runs/store.py`, `api.py` (recording + runs/evals endpoints), `config.py` (RUNS_DB), `frontend/src/components/RunsPage.tsx`, `TracePanel.tsx` (export RunBlock), `frontend/src/api.ts` (getRuns/getRun/getLatestEval), `tests/test_runs.py` |
+
+P12 and P13 both touch `api.py` and `api.ts` (different sections) and both create `RunsPage.tsx`. Opus resolves these at
+integration: P13's `RunsPage.tsx` wins.

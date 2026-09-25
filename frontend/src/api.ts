@@ -24,6 +24,12 @@ export type Agent = { name: string; description: string; tools: AgentTool[] }
 export type Source = { n: number; source: string; heading: string; text: string; score: number }
 
 /**
+ * One fact Arty remembers about you (GET /api/memory, Phase 12 Memory page, contracts.md § 15).
+ * `created_at` is a Unix timestamp (seconds); `thread_id` is the chat it was learned in.
+ */
+export type Fact = { key: string; value: string; created_at: number; thread_id: string }
+
+/**
  * A mutating tool (e.g. save_ideas) waiting for your Approve/Reject click (Phase 6, contracts.md §
  * 10). `args` are the exact arguments the tool would run with; `tainted` is true when this chat has
  * read untrusted content, and `taint_sources` says where from (e.g. "fetch_comments").
@@ -95,6 +101,77 @@ export const getThread = (threadId: string) =>
 
 /** The whole team and their tools, for the sidebar's Team panel (X3). */
 export const getAgents = () => getJson<Agent[]>('/api/agents')
+
+/** Every fact Arty remembers, newest first (the Memory page, Phase 12). */
+export const getMemory = () => getJson<Fact[]>('/api/memory')
+
+/** Edit a fact's value; throws (with the response's status in the message) if the key is unknown. */
+export async function updateMemory(key: string, value: string): Promise<Fact> {
+  const res = await fetch(`/api/memory/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  })
+  if (!res.ok) throw new Error(`PUT /api/memory/${key} returned ${res.status}`)
+  return res.json()
+}
+
+/** Delete a fact; throws (with the response's status in the message) if the key is unknown. */
+export async function deleteMemory(key: string): Promise<void> {
+  const res = await fetch(`/api/memory/${encodeURIComponent(key)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`DELETE /api/memory/${key} returned ${res.status}`)
+}
+
+/**
+ * One row of the Runs page's table (GET /api/runs, Phase 13, contracts.md § 15): everything about
+ * one chat request except its trace lines, which are only fetched once a row is clicked (getRun,
+ * below). `answered_by` is null when nothing finished answering (e.g. a blocked or paused request).
+ */
+export type RunRow = {
+  trace_id: string
+  thread_id: string
+  started_at: number
+  prompt: string
+  answered_by: string | null
+  status: 'ok' | 'error' | 'approval' | 'blocked' | 'stopped' | 'redacted'
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+  ms: number
+  steps: number
+}
+
+/** One request's full detail (GET /api/runs/{trace_id}): a RunRow plus its trace lines. */
+export type RunDetail = RunRow & { trace: TraceLine[] }
+
+/** One suite's results inside the latest eval report (GET /api/evals/latest, contracts.md § 15). */
+export type EvalSuite = { passed: number; total: number; cases: unknown[] }
+
+/** The latest eval report's JSON summary (Phase 11, contracts.md § 15): `evals/run.py`'s own report shape. */
+export type EvalSummary = {
+  started_at: string
+  model: string
+  suites: Record<string, EvalSuite>
+  cost_usd: number
+  dry_run: boolean
+}
+
+/** The Runs page's table, newest first. */
+export const getRuns = (limit = 50) => getJson<RunRow[]>(`/api/runs?limit=${limit}`)
+
+/** One run's full detail (its trace lines included), for the row a click opened. */
+export const getRun = (traceId: string) => getJson<RunDetail>(`/api/runs/${traceId}`)
+
+/**
+ * The latest eval report's summary, or null if the evals runner has never been run (a 404) — the
+ * Runs page shows its own fallback text for that case instead of treating it as a real error.
+ */
+export async function getLatestEval(): Promise<EvalSummary | null> {
+  const res = await fetch('/api/evals/latest')
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`/api/evals/latest returned ${res.status}`)
+  return res.json()
+}
 
 /**
  * Read an SSE response body and call `onEvent` for every event it contains. Shared by streamChat

@@ -40,12 +40,16 @@ searching the knowledge base, blocked, or happy (with a wink).
 | `backend/artlab/memory/` | Long-term memory: `store.py` (Chroma collection "memory", upsert by key), extraction from your words only (never tool output), flagged messages skipped |
 | `backend/skills/` | SKILL.md files: retention-analysis, hook-formulas, style-guide. Read at startup by `backend/artlab/skills/loader.py`; agents see only names and descriptions, and load the full text on demand with `load_skill` |
 | `knowledge/` | Sample documents to search: 6 fictional studio policies + a poisoned test note |
-| `evals/` | Golden question sets: routing, rag, youtube_researcher, content_ideator, english_coach; eval runners |
-| `backend/tests/` | 228 tests on the fake model and local embeddings — no API calls, $0 |
+| `backend/artlab/evals/run.py` | Phase 11 eval runner: `cd backend && uv run python -m artlab.evals.run --suite routing\|rag\|workers\|all [--dry-run] [--max-usd 0.50]`; Haiku judge, budget guard, reports in `evals/reports/` (md + json) with S0–S16 checklist |
+| `backend/artlab/runs/store.py` | Phase 13 runs database: records every request (status, tokens, cost, time, steps, trace) in `data/runs.db`; GET `/api/runs`, `/api/runs/{trace_id}`, `/api/evals/latest` |
+| `evals/` | Golden question sets and reports: routing, rag, youtube_researcher, content_ideator, english_coach |
+| `backend/tests/` | 251 tests on the fake model and local embeddings — no API calls, $0 |
 | `frontend/src/` | React app: chat list, chat (with Sources), live trace panel |
 | `frontend/src/components/Arty.tsx` | Arty, drawn as an SVG with five moods (idle, thinking, searching, happy, blocked) |
 | `frontend/src/components/ApprovalCard.tsx` | Phase 6: Approve / Reject card for mutating tools; shows taint warning and what the tool will do |
 | `frontend/src/components/TeamList.tsx` | Phase 5 sidebar section listing available workers (team agents) |
+| `frontend/src/components/MemoryPage.tsx` | Phase 12: list, edit and delete facts from long-term memory; GET/PUT/DELETE `/api/memory` |
+| `frontend/src/components/RunsPage.tsx` | Phase 13: list every request with cost, tokens, steps, LangSmith link, trace and latest eval summary |
 | `.env.example` | Settings template: API keys, LangSmith, fake-model switch |
 
 ---
@@ -151,6 +155,19 @@ skipped required check as passed. The exceptions are `docs/architecture.md` and 
 they're ingested into the knowledge base, so they still run the tests. So do `knowledge/`, `evals/` and
 `backend/skills/`, because tests read them. Pushes to `main` always run everything.
 
+## Evals
+
+**Phase 11 evaluation suite**: three independent test suites (routing, RAG, workers) with golden questions and a Haiku judge.
+
+```bash
+cd backend && uv run python -m artlab.evals.run --suite routing|rag|workers|all [--dry-run] [--max-usd 0.50]
+```
+
+- **`--dry-run`**: dry runs only; does not call Claude, $0 cost. Run before any paid eval to verify the setup.
+- **`--max-usd`**: budget guard; stops if cost would exceed the limit (default 0.50 for the full suite).
+- Reports saved to `evals/reports/` as markdown (readable summary) and JSON (traceable details).
+- Dry-run tested. First real run (W0.3, under 10 cents with Haiku) awaits Sol's OK.
+
 ---
 
 ## Build status
@@ -171,7 +188,9 @@ Each phase ends **working, visible in the trace panel, tested, and documented**.
 | 9 | **Handoffs planned upfront**: supervisor can plan up to 3 steps, each answer passed to the next as untrusted artifact | ✅ done |
 | 9b | **Agent calls agent**: content_ideator can call youtube_researcher nested (depth 1, cost shared) via ask_youtube_researcher | ✅ done |
 | 10 | **Output guard + caps**: output_guard checks answers (leaked prompts withheld, internal tags stripped, content_ideator without 3 ideas warns); turn caps (90 s or $0.05) stop dispatch with best answer so far | ✅ done |
-| 11–13 | Evals, dashboards, memory page | planned |
+| 11 | **Eval runner**: Haiku judge, routing/RAG/worker suites, golden questions, budget guard, dry-run tested; first paid run pending | ✅ built, dry-run tested, paid run pending |
+| 12 | **Memory page**: list, edit, delete facts from long-term memory via GET/PUT/DELETE `/api/memory`; sidebar button | ✅ done |
+| 13 | **Runs page**: every request persisted with cost, tokens, steps, LangSmith link; sidebar button with latest eval summary | ✅ done |
 
 ---
 
@@ -226,15 +245,17 @@ art-lab/
 │   │   ├── guards/               # Input guard + injection rules; later output guard
 │   │   ├── rag/                  # ingest, web fetch, embeddings, knowledge base + search
 │   │   ├── memory/               # Long-term memory: Chroma collection, extraction and recall
+│   │   ├── evals/                # Phase 11 eval runner: routing, RAG, workers suites, Haiku judge, reports
+│   │   ├── runs/                 # Phase 13 runs database: records every request (tokens, cost, time, steps, trace)
 │   │   └── tools/                # registry, gateway (timeout/retry), untrusted wrapper, stubs, catalog
 │   ├── skills/                   # SKILL.md files for phases 5+: retention-analysis, hook-formulas, style-guide
-│   └── tests/                    # 216 tests: api, guard, agents, tools, RAG, skills, evals, Phase 5 workers
+│   └── tests/                    # 251 tests: api, guard, agents, tools, RAG, skills, evals, Phase 5 workers
 ├── evals/                        # Golden question sets and eval runners: routing, RAG, workers
 ├── frontend/                     # Vite · React · TypeScript · Tailwind
 │   └── src/
 │       ├── api.ts                # Backend client + stream reader
 │       ├── App.tsx               # Page state + three-pane layout
 │       ├── index.css             # Theme: colours, fonts (Geist), dark mode
-│       └── components/           # Arty (the character) · Sidebar · ChatView (+ Sources) · TracePanel
-└── data/                         # git-ignored: chats (artlab.db), knowledge base (chroma/), embedding model (models/)
+│       └── components/           # Arty (the character) · Sidebar · ChatView (+ Sources) · TracePanel · MemoryPage · RunsPage
+└── data/                         # git-ignored: chats (artlab.db), knowledge base (chroma/), runs (runs.db), embedding model (models/)
 ```
