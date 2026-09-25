@@ -4,7 +4,7 @@
 model does each one — so development costs fewer tokens without lowering quality.
 **What to build and in what order** stays in the design book (`docs/design.html`); this plan follows it.
 
-Status: Waves 0–1, T3 and Phases 0–5 (Wave 2: F1, T7–T10) done; Phase 6 (approvals: T13a/T13b as P6a/P6b) done on 2026-09-24 · Phase 7 (memory + summarizing) done on 2026-09-24 · Phase 8 (skills) done on 2026-09-24 · Phase 9 + 9b (handoffs planned upfront, agent calls agent) done on 2026-09-24 · Phase 10 (output guard + caps) done on 2026-09-24 · next: Phases 11–13.
+Status: All phases 0–13 built by 2026-09-24 · waiting on Sol: W0.3 real-Claude smoke test and the first paid eval run.
 
 ---
 
@@ -115,9 +115,9 @@ change (plus its own tests), which is what makes parallel work safe.
 
 | ID | Task | Phase | Model | Owns | Done when |
 |---|---|---|---|---|---|
-| T16 | **Paid eval runner**: routing, faithfulness (LLM judge = Haiku), golden sets from T5; a report | 11 | Sonnet builds; run needs Sol's OK | `evals/` runner | All scenarios pass as a gate |
-| T17 | **Memory page**: list / edit / delete facts (API + React) | 12 | Sonnet | memory API, `MemoryPage.tsx` | S12 passes |
-| T18 | **Runs page**: persist run summaries; cost, steps, eval results | 13 | Sonnet | runs table + API, `RunsPage.tsx` | Runs listed with cost and LangSmith links |
+| T16 | **Paid eval runner**: routing, faithfulness (LLM judge = Haiku), golden sets from T5; a report | 11 | Sonnet builds; run needs Sol's OK | `evals/` runner | ✅ built, paid run pending |
+| T17 | **Memory page**: list / edit / delete facts (API + React) | 12 | Sonnet | memory API, `MemoryPage.tsx` | ✅ S12 passes |
+| T18 | **Runs page**: persist run summaries; cost, steps, eval results | 13 | Sonnet | runs table + API, `RunsPage.tsx` | ✅ Runs listed with cost and LangSmith links |
 
 ### Continuous
 
