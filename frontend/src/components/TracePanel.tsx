@@ -75,8 +75,12 @@ export function TracePanel({ runs, busy }: { runs: Run[]; busy: boolean }) {
   )
 }
 
-/** One run's card: header (prompt + trace ID), one line per stage, then a running/error/footer line. */
-function RunBlock({ run, running }: { run: Run; running: boolean }) {
+/**
+ * One run's card: header (prompt + trace ID), one line per stage, then a running/error/footer line.
+ * Exported so the Runs page (Phase 13, contracts.md § 15) can reuse this exact card to replay a
+ * recorded request's trace, instead of a second copy of this layout.
+ */
+export function RunBlock({ run, running }: { run: Run; running: boolean }) {
   return (
     <section className="card p-3">
       <div className="mb-2 flex items-baseline justify-between gap-3 text-muted">

@@ -8,6 +8,9 @@ Endpoints:
     GET  /api/threads              list all chats, newest first (the left sidebar)
     GET  /api/threads/{thread_id}  one chat's full history, with each answer's sources
     GET  /api/agents               the team and their tools, for the sidebar's Team panel (X3)
+    GET  /api/runs                 the run log, newest first, for the Runs page (Phase 13, § 15)
+    GET  /api/runs/{trace_id}      one recorded request, trace lines included
+    GET  /api/evals/latest         the newest eval report's summary (Phase 11, § 15), or 404
 
 How POST /api/chat (and /api/chat/resume) stream. The response is *server-sent events* (SSE): a
 long-lived HTTP response made of small text blocks, each one looking like
@@ -40,7 +43,9 @@ tail — the only difference between a first message and a resume is what starts
 Run the server:  cd backend && uv run uvicorn artlab.api:app --reload --port 8000
 """
 
+import asyncio
 import json
+import logging
 import time
 import uuid
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -65,7 +70,10 @@ from artlab.guards.classifier import InjectionClassifier, load_classifier
 from artlab.memory.store import MemoryStore
 from artlab.model import cost_usd, make_model
 from artlab.rag.knowledge import KnowledgeBase
+from artlab.runs.store import RunStore
 from artlab.tools.catalog import build_tools
+
+logger = logging.getLogger(__name__)
 
 # Load settings (API keys, ARTLAB_FAKE_LLM, LangSmith) from the repo's .env into environment
 # variables. LangChain and LangSmith read them from there automatically.
@@ -107,12 +115,16 @@ def sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-async def stream_run(graph, run_input, config: dict, started: float):
+async def stream_run(graph, run_input, config: dict, started: float, *, runs: RunStore, trace_id: str, prompt: str):
     """Run the graph once and yield the SSE events for it: trace/token as they happen, then one of
     `approval`+`done`, plain `done`, or `error`. Shared by POST /api/chat (a new `HumanMessage`) and
     POST /api/chat/resume (`Command(resume=...)`, Phase 6, docs/contracts.md § 10) — both endpoints
     only differ in what starts the graph and in the `start` event they send first, so this is the one
     place that has to know the event shapes.
+
+    Phase 13 (docs/contracts.md § 15): every call here is one "request" to the Runs page — a plain
+    message, a resume, or a pause for approval — and records exactly one row in `runs` once it ends
+    (see `record`, below), so the page can list and replay every request the chat ever made.
 
     Args:
         graph:   the compiled chat graph (app.state.graph)
@@ -120,6 +132,10 @@ async def stream_run(graph, run_input, config: dict, started: float):
                  `Command(resume=...)` (continuing a paused one)
         config:  `{"configurable": {"thread_id": ...}}`, plus a run_id for a fresh run
         started: `time.perf_counter()` reading from just before this call, for the `done` event's `ms`
+        runs:    the run log (app.state.runs) to record this request's row into
+        trace_id: this request's trace ID — the same one already sent in its `start` SSE event
+        prompt:  what to show for this request in the Runs table (the message text, or a short label
+                 like "[resume] save_ideas · approve" for a resume — see the two endpoints below)
     """
     tokens_in = tokens_out = 0
     # Set when a "custom" chunk is the OUTPUT guard's own trace line (its detail always starts with
@@ -128,6 +144,34 @@ async def stream_run(graph, run_input, config: dict, started: float):
     # lines in a completed turn (the input guard's own line, if any, comes first), so by the time the
     # loop below ends this holds exactly what the LAST such line said. Phase 10, docs/contracts.md § 14.
     output_redacted = False
+    trace_lines: list[dict] = []  # every `trace` chunk this request produced, for the Runs page's replay
+
+    async def record(status: str) -> None:
+        """Save this request's row to the run log. Wrapped so a storage problem (a full disk, a
+        locked file) can never break the chat itself — it's only logged (docs/contracts.md § 15)."""
+        answered_by = next(
+            (
+                line["detail"].split("done · answered by ", 1)[1]
+                for line in trace_lines
+                if line.get("stage") == "arty" and line.get("detail", "").startswith("done · answered by ")
+            ),
+            None,
+        )
+        try:
+            await asyncio.to_thread(
+                runs.add,
+                {
+                    "trace_id": trace_id, "thread_id": config["configurable"]["thread_id"],
+                    "started_at": time.time(), "prompt": prompt[:200], "answered_by": answered_by,
+                    "status": status, "input_tokens": tokens_in, "output_tokens": tokens_out,
+                    "cost_usd": cost_usd(tokens_in, tokens_out),
+                    "ms": round((time.perf_counter() - started) * 1000),
+                    "steps": len(trace_lines), "trace_json": json.dumps(trace_lines),
+                },
+            )
+        except Exception:
+            logger.exception("failed to record run %s", trace_id)
+
     try:
         # Run the graph with two stream modes at once. Each item is (mode, chunk):
         #   "custom"   → a dict a node wrote with get_stream_writer()  → forward as `trace`
@@ -142,6 +186,7 @@ async def stream_run(graph, run_input, config: dict, started: float):
                 tokens_out += chunk.get("output_tokens", 0)
                 if chunk.get("stage") == "guard" and chunk.get("detail", "").startswith("output"):
                     output_redacted = chunk.get("status") == "blocked"
+                trace_lines.append(chunk)
                 yield sse("trace", chunk)
             else:
                 message, meta = chunk
@@ -158,6 +203,7 @@ async def stream_run(graph, run_input, config: dict, started: float):
         # Anything that goes wrong (missing API key, network error, …) becomes an `error`
         # event the page can show, instead of a silently broken stream.
         yield sse("error", {"message": f"{type(exc).__name__}: {exc}"})
+        await record("error")
         return
 
     done = {
@@ -173,6 +219,7 @@ async def stream_run(graph, run_input, config: dict, started: float):
     if state.next == ("approval",):
         yield sse("approval", state.values["pending_approval"])
         yield sse("done", done)
+        await record("approval")
         return
 
     # The final answer is the last message; rag_agent attached its sources to it.
@@ -191,6 +238,20 @@ async def stream_run(graph, run_input, config: dict, started: float):
 
     yield sse("done", done)
 
+    # Status rules (docs/contracts.md § 15), checked in this order: the input guard's own refusal
+    # ("blocked" — a stage "guard" line whose detail does NOT start with "output": that prefix marks
+    # the OUTPUT guard's own line instead, which is `output_redacted` above, not a refusal); a
+    # breaker/cap stop ("stopped"); the output guard having redacted something ("redacted"); else
+    # "ok". ("error" and "approval" are recorded above, at their own return points — a completed run
+    # can't also be either of those.)
+    blocked = any(
+        line.get("stage") == "guard" and line.get("status") == "blocked" and not line.get("detail", "").startswith("output")
+        for line in trace_lines
+    )
+    stopped = any(line.get("status") == "stopped" for line in trace_lines)
+    status = "blocked" if blocked else "stopped" if stopped else "redacted" if output_redacted else "ok"
+    await record(status)
+
 
 def create_app(
     model: BaseChatModel | None = None,
@@ -199,6 +260,8 @@ def create_app(
     classifier: InjectionClassifier | None = None,
     ideas_dir: Path | None = None,
     memory: MemoryStore | None = None,
+    runs: RunStore | None = None,
+    evals_reports_dir: Path | None = None,
 ) -> FastAPI:
     """Build the FastAPI app.
 
@@ -215,6 +278,11 @@ def create_app(
         memory:       the long-term memory store (Phase 7, docs/contracts.md § 11); None means a real
                       `MemoryStore()` (opens data/chroma, same as `knowledge`'s default). Tests always
                       pass a temp store — a test run must never read or write the owner's real memory.
+        runs:         the run log (Phase 13, docs/contracts.md § 15); None means a real `RunStore()`
+                      (opens data/runs.db). Tests pass a temp store, same reason as `memory`.
+        evals_reports_dir: where GET /api/evals/latest looks for report JSON files; None means the
+                      real evals/reports folder (Phase 11's `evals/run.py` writes there). Tests pass a
+                      temp folder so a report they write never lands in the repo's own evals/reports.
 
     The real server calls this with no arguments except the classifier (see the last line of this
     file). Tests pass a fake model, in-memory chat storage and a temporary knowledge base, so they
@@ -242,6 +310,8 @@ def create_app(
             tools = build_tools(knowledge or KnowledgeBase(), ideas_dir or IDEAS_DIR, model=chat_model)
             app.state.checkpointer = saver
             app.state.tools = tools
+            app.state.runs = runs or RunStore()
+            app.state.evals_reports_dir = evals_reports_dir or (REPO_ROOT / "evals" / "reports")
             app.state.graph = build_graph(chat_model, saver, tools, memory or MemoryStore(), classifier=classifier)
             yield
 
@@ -291,7 +361,10 @@ def create_app(
                     "detail": "pending approval cancelled by a new message", "ms": 0,
                 })
 
-            async for event in stream_run(graph, {"messages": [HumanMessage(req.message)]}, config, started):
+            async for event in stream_run(
+                graph, {"messages": [HumanMessage(req.message)]}, config, started,
+                runs=app.state.runs, trace_id=trace_id, prompt=req.message,
+            ):
                 yield event
 
         # StreamingResponse sends each string `events()` yields as soon as it's yielded.
@@ -319,10 +392,15 @@ def create_app(
             raise HTTPException(409, "That approval card is stale (already resolved, or from an older request)")
 
         async def events():
-            yield sse("start", {"trace_id": str(uuid.uuid4()), "thread_id": req.thread_id})
+            trace_id = str(uuid.uuid4())
+            yield sse("start", {"trace_id": trace_id, "thread_id": req.thread_id})
             started = time.perf_counter()
+            # No new message was typed for a resume — the Runs table shows what was clicked instead
+            # (docs/contracts.md § 15), naming the tool the card was for.
+            prompt = f"[resume] {pending['tool']} · {'approve' if req.approve else 'reject'}"
             async for event in stream_run(
-                graph, Command(resume={"id": req.id, "approve": req.approve}), config, started
+                graph, Command(resume={"id": req.id, "approve": req.approve}), config, started,
+                runs=app.state.runs, trace_id=trace_id, prompt=prompt,
             ):
                 yield event
 
@@ -379,6 +457,32 @@ def create_app(
                 for m in messages
             ],
         }
+
+    @app.get("/api/runs")
+    async def list_runs(limit: int = 50):
+        """The Runs page's table (Phase 13, docs/contracts.md § 15): the `limit` most recent
+        recorded requests, newest first, without their trace lines — those come from
+        GET /api/runs/{trace_id}, only once a row is actually clicked."""
+        return await asyncio.to_thread(app.state.runs.list, limit)
+
+    @app.get("/api/runs/{trace_id}")
+    async def get_run(trace_id: str):
+        """One recorded request's full detail, trace lines included; 404 if no run was ever
+        recorded under this trace ID."""
+        run = await asyncio.to_thread(app.state.runs.get, trace_id)
+        if run is None:
+            raise HTTPException(404, "No run with that trace ID")
+        return run
+
+    @app.get("/api/evals/latest")
+    async def latest_eval():
+        """The newest eval report's JSON summary (Phase 11, docs/contracts.md § 15) — the report
+        `evals/run.py` writes last, picked by filename (`<YYYY-MM-DD-HHMM>.json` sorts the same way
+        chronologically as by name). 404 if the evals runner has never been run."""
+        reports = sorted(app.state.evals_reports_dir.glob("*.json")) if app.state.evals_reports_dir.exists() else []
+        if not reports:
+            raise HTTPException(404, "No eval report yet")
+        return json.loads(reports[-1].read_text())
 
     return app
 

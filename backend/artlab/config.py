@@ -12,6 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 DATA_DIR = REPO_ROOT / "data"
 DB_PATH = DATA_DIR / "artlab.db"  # chat history (SQLite checkpointer)
+RUNS_DB = DATA_DIR / "runs.db"  # the run log: one row per chat request (Phase 13, docs/contracts.md § 15)
 CHROMA_DIR = DATA_DIR / "chroma"  # the knowledge base (Chroma vector database)
 MODELS_DIR = DATA_DIR / "models"  # the downloaded local embedding model (~70 MB, fetched once)
 IDEAS_DIR = DATA_DIR / "ideas"  # where save_ideas writes (Phase 6, docs/contracts.md § 10)

@@ -97,6 +97,57 @@ export const getThread = (threadId: string) =>
 export const getAgents = () => getJson<Agent[]>('/api/agents')
 
 /**
+ * One row of the Runs page's table (GET /api/runs, Phase 13, contracts.md § 15): everything about
+ * one chat request except its trace lines, which are only fetched once a row is clicked (getRun,
+ * below). `answered_by` is null when nothing finished answering (e.g. a blocked or paused request).
+ */
+export type RunRow = {
+  trace_id: string
+  thread_id: string
+  started_at: number
+  prompt: string
+  answered_by: string | null
+  status: 'ok' | 'error' | 'approval' | 'blocked' | 'stopped' | 'redacted'
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+  ms: number
+  steps: number
+}
+
+/** One request's full detail (GET /api/runs/{trace_id}): a RunRow plus its trace lines. */
+export type RunDetail = RunRow & { trace: TraceLine[] }
+
+/** One suite's results inside the latest eval report (GET /api/evals/latest, contracts.md § 15). */
+export type EvalSuite = { passed: number; total: number; cases: unknown[] }
+
+/** The latest eval report's JSON summary (Phase 11, contracts.md § 15): `evals/run.py`'s own report shape. */
+export type EvalSummary = {
+  started_at: string
+  model: string
+  suites: Record<string, EvalSuite>
+  cost_usd: number
+  dry_run: boolean
+}
+
+/** The Runs page's table, newest first. */
+export const getRuns = (limit = 50) => getJson<RunRow[]>(`/api/runs?limit=${limit}`)
+
+/** One run's full detail (its trace lines included), for the row a click opened. */
+export const getRun = (traceId: string) => getJson<RunDetail>(`/api/runs/${traceId}`)
+
+/**
+ * The latest eval report's summary, or null if the evals runner has never been run (a 404) — the
+ * Runs page shows its own fallback text for that case instead of treating it as a real error.
+ */
+export async function getLatestEval(): Promise<EvalSummary | null> {
+  const res = await fetch('/api/evals/latest')
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`/api/evals/latest returned ${res.status}`)
+  return res.json()
+}
+
+/**
  * Read an SSE response body and call `onEvent` for every event it contains. Shared by streamChat
  * and resumeChat below, since both talk to endpoints that stream the same event shapes — this is
  * the one place that knows the wire format, so it isn't duplicated between them.
