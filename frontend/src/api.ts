@@ -24,6 +24,12 @@ export type Agent = { name: string; description: string; tools: AgentTool[] }
 export type Source = { n: number; source: string; heading: string; text: string; score: number }
 
 /**
+ * One fact Arty remembers about you (GET /api/memory, Phase 12 Memory page, contracts.md § 15).
+ * `created_at` is a Unix timestamp (seconds); `thread_id` is the chat it was learned in.
+ */
+export type Fact = { key: string; value: string; created_at: number; thread_id: string }
+
+/**
  * A mutating tool (e.g. save_ideas) waiting for your Approve/Reject click (Phase 6, contracts.md §
  * 10). `args` are the exact arguments the tool would run with; `tainted` is true when this chat has
  * read untrusted content, and `taint_sources` says where from (e.g. "fetch_comments").
@@ -95,6 +101,26 @@ export const getThread = (threadId: string) =>
 
 /** The whole team and their tools, for the sidebar's Team panel (X3). */
 export const getAgents = () => getJson<Agent[]>('/api/agents')
+
+/** Every fact Arty remembers, newest first (the Memory page, Phase 12). */
+export const getMemory = () => getJson<Fact[]>('/api/memory')
+
+/** Edit a fact's value; throws (with the response's status in the message) if the key is unknown. */
+export async function updateMemory(key: string, value: string): Promise<Fact> {
+  const res = await fetch(`/api/memory/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  })
+  if (!res.ok) throw new Error(`PUT /api/memory/${key} returned ${res.status}`)
+  return res.json()
+}
+
+/** Delete a fact; throws (with the response's status in the message) if the key is unknown. */
+export async function deleteMemory(key: string): Promise<void> {
+  const res = await fetch(`/api/memory/${encodeURIComponent(key)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`DELETE /api/memory/${key} returned ${res.status}`)
+}
 
 /**
  * Read an SSE response body and call `onEvent` for every event it contains. Shared by streamChat
