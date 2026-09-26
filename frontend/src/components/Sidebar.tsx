@@ -2,7 +2,8 @@
  * Sidebar.tsx — the left pane: the Art Lab logo with Arty, "New chat", the list of saved chats, a
  * collapsible Team section (X3), and the Memory / Runs page-navigation buttons (Phase 12, P12).
  *
- * It only displays what App gives it and reports clicks back through onOpen / onNew / onNavigate.
+ * It only displays what App gives it and reports clicks back through onOpen / onNew / onNavigate /
+ * onDelete (each chat card has an × that deletes the chat and all its server-side data).
  * Team is the one exception: it fetches its own data (see TeamList.tsx) since nothing else on the
  * page needs it. Style: the sage page with white cards (see .card, .btn-black in index.css); the
  * open chat (or page) is orange.
@@ -20,6 +21,8 @@ type Props = {
   onOpen: (id: string) => void // a chat was clicked
   onNew: () => void // "New chat" was clicked
   onNavigate: (view: View) => void // "Memory" or "Runs" was clicked
+  onDelete: (id: string, title: string) => void // a chat's × was clicked (App asks to confirm)
+  busy: boolean // an answer is streaming; delete buttons are disabled meanwhile
 }
 
 /** Turn an ISO timestamp into a short relative label: "just now", "5m ago", "3h ago", "2d ago". */
@@ -31,7 +34,7 @@ function timeAgo(iso: string): string {
   return `${Math.round(minutes / 60 / 24)}d ago`
 }
 
-export function Sidebar({ threads, error, activeId, view, onOpen, onNew, onNavigate }: Props) {
+export function Sidebar({ threads, error, activeId, view, onOpen, onNew, onNavigate, onDelete, busy }: Props) {
   return (
     // Hidden below 1024px wide (lg); App shows only the chat there.
     <aside className="hidden min-h-0 flex-col gap-5 border-r-2 border-ink bg-sage p-5 lg:flex">
@@ -54,19 +57,33 @@ export function Sidebar({ threads, error, activeId, view, onOpen, onNew, onNavig
         {!error && threads.length === 0 && <p className="text-sm font-medium">No chats yet — say hi to Arty!</p>}
         {threads.map((t) => {
           const active = t.thread_id === activeId
+          // One card, two buttons side by side: open (most of the card) and delete (the ×).
+          // They're siblings, not nested — a <button> inside a <button> is invalid HTML.
           return (
-            <button
+            <div
               key={t.thread_id}
-              type="button"
-              onClick={() => onOpen(t.thread_id)}
-              aria-current={active ? 'page' : undefined} // tells screen readers which chat is open
-              className={`card px-3 py-2 text-left transition-transform hover:-translate-y-0.5 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink ${
-                active ? 'bg-orange' : ''
-              }`}
+              className={`card flex items-stretch transition-transform hover:-translate-y-0.5 ${active ? 'bg-orange' : ''}`}
             >
-              <span className="block truncate text-sm font-semibold">{t.title}</span>
-              <span className="block text-xs text-muted">{timeAgo(t.updated_at)}</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => onOpen(t.thread_id)}
+                aria-current={active ? 'page' : undefined} // tells screen readers which chat is open
+                className="min-w-0 flex-1 px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+              >
+                <span className="block truncate text-sm font-semibold">{t.title}</span>
+                <span className="block text-xs text-muted">{timeAgo(t.updated_at)}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete(t.thread_id, t.title)}
+                disabled={busy} // can't delete while an answer streams (it might be this chat's)
+                aria-label={`Delete chat: ${t.title}`}
+                title="Delete chat"
+                className="px-3 text-lg font-bold text-muted hover:text-danger focus-visible:outline-2 focus-visible:outline-ink disabled:opacity-30"
+              >
+                ×
+              </button>
+            </div>
           )
         })}
       </nav>

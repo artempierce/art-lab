@@ -23,6 +23,7 @@ import {
   type RunSummary,
   type Thread,
   type TraceLine,
+  deleteThread,
   getThread,
   listThreads,
   resumeChat,
@@ -261,6 +262,36 @@ export default function App() {
     setRunsByThread((rs) => ({ ...rs, [NEW_CHAT_KEY]: [] }))
   }
 
+  /**
+   * Delete a chat after you confirm. The server removes its history, its Runs-page rows and the
+   * facts it taught Arty (api.py → delete_thread); here we only tidy the page:
+   *
+   * 1. Ask first — this can't be undone.
+   * 2. Tell the server. On failure, show why and change nothing on the page.
+   * 3. If it was the open chat, switch to a fresh one, so the pane never shows deleted messages.
+   * 4. Drop its trace-panel runs from this tab's memory, and reload the sidebar list.
+   */
+  async function deleteChat(id: string, chatTitle: string) {
+    if (busy) return
+    // 1. The browser's built-in confirm box: blocking and plain, but enough for a local lab app.
+    if (!window.confirm(`Delete "${chatTitle}"?\n\nIts messages, its Runs-page rows and the facts Arty learned in it are removed for good.`)) return
+
+    // 2.
+    try {
+      await deleteThread(id)
+    } catch (err) {
+      window.alert(`Could not delete the chat: ${err instanceof Error ? err.message : err}`)
+      return
+    }
+
+    // 3.
+    if (id === threadId) newChat()
+
+    // 4. `{ [id]: _gone, ...rest }` copies every entry except this chat's into `rest`.
+    setRunsByThread(({ [id]: _gone, ...rest }) => rest)
+    refreshThreads()
+  }
+
   const title = threads.find((t) => t.thread_id === threadId)?.title ?? 'New chat'
   const mood = artyMood(runs, busy)
 
@@ -278,6 +309,8 @@ export default function App() {
         onOpen={openThread}
         onNew={newChat}
         onNavigate={setView}
+        onDelete={deleteChat}
+        busy={busy}
       />
       {view === 'memory' && <MemoryPage />}
       {view === 'runs' && <RunsPage />}

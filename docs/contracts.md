@@ -660,3 +660,15 @@ Opus, following the design book. Each one is marked **(chosen)** so it's easy to
 
 P12 and P13 both touch `api.py` and `api.ts` (different sections) and both create `RunsPage.tsx`. Opus resolves these at
 integration: P13's `RunsPage.tsx` wins.
+
+## 16. Deleting a chat
+
+- API: `DELETE /api/threads/{thread_id}` → 204, or 404 if the checkpointer has no messages for that id (unknown, or
+  already deleted). The owner's own click on localhost, so trusted — no approval card.
+- What goes, in this order: memory facts whose `thread_id` is the chat (`MemoryStore.delete_thread` — a fact belongs to
+  the chat that saved it *last*, since `save` upserts by key), run-log rows (`RunStore.delete_thread`), then the history
+  (`checkpointer.adelete_thread`: every checkpoint + pending write). History goes last so a half-failed delete stays
+  visible in the sidebar and can be retried.
+- What stays: `data/ideas` files (not linked to a chat) and LangSmith traces (remote; delete them on LangSmith).
+- UI: each sidebar card has an × (disabled while an answer streams) → browser confirm → delete; deleting the open chat
+  switches to a new chat. Tests: `tests/test_delete_thread.py`.
