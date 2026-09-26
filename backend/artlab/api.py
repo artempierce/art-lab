@@ -7,6 +7,7 @@ Endpoints:
     POST /api/chat/resume          answer a pending Approve/Reject card; streams the same way (Phase 6)
     GET  /api/threads              list all chats, newest first (the left sidebar)
     GET  /api/threads/{thread_id}  one chat's full history, with each answer's sources
+    DELETE /api/threads/{thread_id} delete a chat and everything linked to it (history, runs, facts); 204 or 404
     GET  /api/agents               the team and their tools, for the sidebar's Team panel (X3)
     GET  /api/memory                list every saved fact, newest first (Phase 12 Memory page)
     PUT  /api/memory/{key}           edit a fact's value; 404 if the key doesn't exist
@@ -504,6 +505,43 @@ def create_app(
                 for m in messages
             ],
         }
+
+    @app.delete("/api/threads/{thread_id}", status_code=204)
+    async def delete_thread(thread_id: str):
+        """Delete one chat and every piece of data linked to it; 204, or 404 if the chat is unknown.
+
+        A chat's data lives in three separate stores, all keyed by its thread_id:
+
+            store          file              what's removed
+            memory         data/chroma       facts this chat saved last (MemoryStore.delete_thread)
+            run log        data/runs.db      its rows on the Runs page (RunStore.delete_thread)
+            checkpointer   data/artlab.db    every snapshot + pending write (the chat history itself)
+
+        Saved idea files (data/ideas) aren't linked to a chat, so they stay. LangSmith traces, if
+        tracing is on, live on LangSmith's servers and have to be deleted there.
+
+        Steps:
+            1. 404 if the checkpointer has no messages for this id (never existed, or already deleted).
+            2. Delete facts, then run-log rows.
+            3. Delete the chat history LAST. Step 1 finds the chat through its history, so if step 2
+               fails halfway, the chat is still listed and clicking delete again finishes the job —
+               deleting history first would leave orphaned rows no button could reach.
+        """
+        # 1. Does this chat exist? Same check GET /api/threads/{id} uses.
+        state = await app.state.graph.aget_state({"configurable": {"thread_id": thread_id}})
+        if not state.values.get("messages"):
+            raise HTTPException(404, "No chat with that ID")
+
+        # 2. The linked data. Both stores are blocking (sqlite3 / Chroma), so they run in a worker
+        #    thread to keep the server free for other requests meanwhile.
+        facts = await asyncio.to_thread(app.state.memory.delete_thread, thread_id)
+        runs = await asyncio.to_thread(app.state.runs.delete_thread, thread_id)
+
+        # 3. The history. `adelete_thread` is LangGraph's own "forget this thread" call: it removes
+        #    every checkpoint (snapshot after each graph step) and every pending write for the id.
+        await app.state.checkpointer.adelete_thread(thread_id)
+        logger.info("deleted chat %s (%d facts, %d runs)", thread_id, facts, runs)
+        return Response(status_code=204)
 
     @app.get("/api/runs")
     async def list_runs(limit: int = 50):

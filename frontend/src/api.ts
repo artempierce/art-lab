@@ -99,6 +99,15 @@ export const listThreads = () => getJson<Thread[]>('/api/threads')
 export const getThread = (threadId: string) =>
   getJson<{ thread_id: string; messages: Message[] }>(`/api/threads/${threadId}`)
 
+/**
+ * Delete a chat and everything linked to it on the server: its history, its Runs-page rows and the
+ * facts it taught Arty (DELETE /api/threads/{id}). Throws if the server refuses (e.g. 404 unknown).
+ */
+export async function deleteThread(threadId: string): Promise<void> {
+  const res = await fetch(`/api/threads/${encodeURIComponent(threadId)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`DELETE /api/threads/${threadId} returned ${res.status}`)
+}
+
 /** The whole team and their tools, for the sidebar's Team panel (X3). */
 export const getAgents = () => getJson<Agent[]>('/api/agents')
 

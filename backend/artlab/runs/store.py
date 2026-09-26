@@ -104,3 +104,15 @@ class RunStore:
         data = dict(zip(COLUMNS, row))
         data["trace"] = json.loads(data.pop("trace_json") or "[]")
         return data
+
+    def delete_thread(self, thread_id: str) -> int:
+        """Remove every row recorded for one chat, when that chat is deleted
+        (DELETE /api/threads/{thread_id} in api.py). Returns how many rows were removed — 0 is fine
+        (e.g. a chat whose only request crashed before it could be recorded).
+
+        Example: a chat where you sent 3 messages has 3 rows → delete_thread(...) == 3
+        """
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM runs WHERE thread_id = ?", (thread_id,))
+            self._conn.commit()
+        return cur.rowcount

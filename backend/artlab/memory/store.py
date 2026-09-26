@@ -140,3 +140,18 @@ class MemoryStore:
     def delete(self, key: str) -> None:
         """Remove one fact by key. Used later by the Phase 12 Memory page."""
         self.store.delete(ids=[f"{OWNER_ID}:{normalise_key(key)}"])
+
+    def delete_thread(self, thread_id: str) -> int:
+        """Remove every fact whose `thread_id` is this chat, when that chat is deleted
+        (DELETE /api/threads/{thread_id} in api.py). Returns how many facts were removed.
+
+        A fact's `thread_id` is the chat that saved it *most recently* — `save` upserts by key and
+        stamps the new chat's id each time. So if chat A said "my niche is X" and chat B later said
+        "my niche is Y", the fact belongs to B: deleting A leaves it, deleting B removes it.
+
+        Chroma's `where` filter takes one condition per key unless they're combined with "$and".
+        """
+        got = self.store.get(where={"$and": [{"owner": OWNER_ID}, {"thread_id": thread_id}]}, include=[])
+        if got["ids"]:
+            self.store.delete(ids=got["ids"])
+        return len(got["ids"])

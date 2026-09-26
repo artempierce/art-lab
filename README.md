@@ -43,8 +43,8 @@ searching the knowledge base, blocked, or happy (with a wink).
 | `backend/artlab/evals/run.py` | Phase 11 eval runner: `cd backend && uv run python -m artlab.evals.run --suite routing\|rag\|workers\|all [--dry-run] [--max-usd 0.50]`; Haiku judge, budget guard, reports in `evals/reports/` (md + json) with S0–S16 checklist |
 | `backend/artlab/runs/store.py` | Phase 13 runs database: records every request (status, tokens, cost, time, steps, trace) in `data/runs.db`; GET `/api/runs`, `/api/runs/{trace_id}`, `/api/evals/latest` |
 | `evals/` | Golden question sets and reports: routing, rag, youtube_researcher, content_ideator, english_coach |
-| `backend/tests/` | 251 tests on the fake model and local embeddings — no API calls, $0 |
-| `frontend/src/` | React app: chat list, chat (with Sources), live trace panel |
+| `backend/tests/` | 256 tests on the fake model and local embeddings — no API calls, $0 |
+| `frontend/src/` | React app: chat list (× deletes a chat and all its data via DELETE `/api/threads/{id}`), chat (with Sources), live trace panel |
 | `frontend/src/components/Arty.tsx` | Arty, drawn as an SVG with five moods (idle, thinking, searching, happy, blocked) |
 | `frontend/src/components/ApprovalCard.tsx` | Phase 6: Approve / Reject card for mutating tools; shows taint warning and what the tool will do |
 | `frontend/src/components/TeamList.tsx` | Phase 5 sidebar section listing available workers (team agents) |
@@ -125,7 +125,9 @@ cd backend && uv run uvicorn artlab.api:app --reload --port 8000
 cd frontend && npm run dev
 ```
 
-Open http://localhost:5173. Chats are stored in `data/artlab.db` — delete it to start fresh.
+Open http://localhost:5173. Chats are stored in `data/artlab.db` — delete it to start fresh. To delete one
+chat, click its × in the sidebar: that removes its history, its Runs-page rows and the facts Arty learned
+in it (saved idea files stay; LangSmith traces, if tracing is on, must be deleted on LangSmith).
 
 ## Test
 
