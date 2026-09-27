@@ -1,16 +1,14 @@
 /**
- * Sidebar.tsx — the left pane: the Art Lab logo with Arty, "New chat", the list of saved chats, a
- * collapsible Team section (X3), and the Memory / Runs page-navigation buttons (Phase 12, P12).
+ * Sidebar.tsx — the left pane: the app name, "New chat", the list of saved chats, a collapsible Team
+ * section (X3), and the Memory / Runs page-navigation buttons (Phase 12, P12).
  *
  * It only displays what App gives it and reports clicks back through onOpen / onNew / onNavigate /
- * onDelete (each chat card has an × that deletes the chat and all its server-side data).
+ * onDelete (each chat row has an × that deletes the chat and all its server-side data).
  * Team is the one exception: it fetches its own data (see TeamList.tsx) since nothing else on the
- * page needs it. Style: the sage page with white cards (see .card, .btn-black in index.css); the
- * open chat (or page) is orange.
+ * page needs it. The open chat (or page) is tinted with the accent colour.
  */
 import type { Thread } from '../api'
 import type { View } from '../App'
-import { Arty } from './Arty'
 import { TeamList } from './TeamList'
 
 type Props = {
@@ -34,43 +32,51 @@ function timeAgo(iso: string): string {
   return `${Math.round(minutes / 60 / 24)}d ago`
 }
 
+/** Classes for a Memory/Runs nav button: accent-tinted while its page is open. */
+function navClass(active: boolean): string {
+  return `rounded-lg px-3 py-1.5 text-sm focus-visible:outline-2 focus-visible:outline-accent ${
+    active ? 'bg-accent/15 text-ink' : 'text-muted hover:bg-surface hover:text-ink'
+  }`
+}
+
 export function Sidebar({ threads, error, activeId, view, onOpen, onNew, onNavigate, onDelete, busy }: Props) {
   return (
     // Hidden below 1024px wide (lg); App shows only the chat there.
-    <aside className="hidden min-h-0 flex-col gap-5 border-r-2 border-ink bg-sage p-5 lg:flex">
-      {/* Logo: Arty next to the app name in heavy display type. */}
-      <div className="flex items-center gap-3">
-        <Arty size={64} />
-        <div>
-          <div className="display text-4xl uppercase">Art Lab</div>
-          <div className="mt-1 text-xs font-medium">with Arty, your interface friend</div>
-        </div>
-      </div>
+    <aside className="hidden min-h-0 flex-col gap-4 border-r border-rule bg-bg p-4 lg:flex">
+      <div className="px-1 text-xl font-bold tracking-tight">Art Lab</div>
 
-      <button type="button" onClick={onNew} className="btn-black px-3 py-2.5 text-lg">
+      <button
+        type="button"
+        onClick={onNew}
+        className="rounded-lg border border-rule bg-surface px-3 py-2 text-left text-sm font-medium hover:border-accent focus-visible:outline-2 focus-visible:outline-accent"
+      >
         + New chat
       </button>
 
-      {/* The chat list scrolls on its own; the logo and footer stay put. */}
-      <nav aria-label="Chats" className="-mx-1 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-1 pt-1 pb-3">
-        {error && <p className="card bg-[#fde2dc] p-3 text-sm font-medium text-danger">{error}</p>}
-        {!error && threads.length === 0 && <p className="text-sm font-medium">No chats yet — say hi to Arty!</p>}
+      {/* The chat list scrolls on its own; the header and footer stay put. */}
+      <nav aria-label="Chats" className="-mx-1 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-1">
+        {error && <p className="px-1 text-sm text-danger">{error}</p>}
+        {!error && threads.length === 0 && <p className="px-3 text-sm text-muted">No chats yet.</p>}
         {threads.map((t) => {
-          const active = t.thread_id === activeId
-          // One card, two buttons side by side: open (most of the card) and delete (the ×).
-          // They're siblings, not nested — a <button> inside a <button> is invalid HTML.
+          const active = t.thread_id === activeId && view === 'chat'
+          // One row, two buttons side by side: open (most of the row) and delete (the ×).
+          // They're siblings, not nested — a <button> inside a <button> is invalid HTML. `group`
+          // lets the × show only while the row is hovered or focused (`group-hover:`), so the list
+          // stays calm until you reach for it.
           return (
             <div
               key={t.thread_id}
-              className={`card flex items-stretch transition-transform hover:-translate-y-0.5 ${active ? 'bg-orange' : ''}`}
+              className={`group flex items-stretch rounded-lg ${active ? 'bg-accent/15' : 'hover:bg-surface'}`}
             >
               <button
                 type="button"
                 onClick={() => onOpen(t.thread_id)}
                 aria-current={active ? 'page' : undefined} // tells screen readers which chat is open
-                className="min-w-0 flex-1 px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+                className={`min-w-0 flex-1 rounded-lg px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-accent ${
+                  active ? 'text-ink' : 'text-muted group-hover:text-ink'
+                }`}
               >
-                <span className="block truncate text-sm font-semibold">{t.title}</span>
+                <span className="block truncate text-sm">{t.title}</span>
                 <span className="block text-xs text-muted">{timeAgo(t.updated_at)}</span>
               </button>
               <button
@@ -79,7 +85,7 @@ export function Sidebar({ threads, error, activeId, view, onOpen, onNew, onNavig
                 disabled={busy} // can't delete while an answer streams (it might be this chat's)
                 aria-label={`Delete chat: ${t.title}`}
                 title="Delete chat"
-                className="px-3 text-lg font-bold text-muted hover:text-danger focus-visible:outline-2 focus-visible:outline-ink disabled:opacity-30"
+                className="rounded-lg px-2.5 text-muted opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:text-danger focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-0"
               >
                 ×
               </button>
@@ -90,26 +96,24 @@ export function Sidebar({ threads, error, activeId, view, onOpen, onNew, onNavig
 
       <TeamList />
 
-      {/* Page navigation: Memory (Phase 12, this ticket) and Runs (Phase 13, a placeholder here). */}
-      <nav aria-label="Pages" className="border-t-2 border-ink pt-4">
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => onNavigate('memory')}
-            aria-current={view === 'memory' ? 'page' : undefined}
-            className={`btn-outline px-3 py-1 text-sm ${view === 'memory' ? 'bg-orange' : ''}`}
-          >
-            Memory
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('runs')}
-            aria-current={view === 'runs' ? 'page' : undefined}
-            className={`btn-outline px-3 py-1 text-sm ${view === 'runs' ? 'bg-orange' : ''}`}
-          >
-            Runs
-          </button>
-        </div>
+      {/* Page navigation: the Memory page (Phase 12) and the Runs page (Phase 13). */}
+      <nav aria-label="Pages" className="flex gap-1 border-t border-rule pt-3">
+        <button
+          type="button"
+          onClick={() => onNavigate('memory')}
+          aria-current={view === 'memory' ? 'page' : undefined}
+          className={navClass(view === 'memory')}
+        >
+          Memory
+        </button>
+        <button
+          type="button"
+          onClick={() => onNavigate('runs')}
+          aria-current={view === 'runs' ? 'page' : undefined}
+          className={navClass(view === 'runs')}
+        >
+          Runs
+        </button>
       </nav>
     </aside>
   )

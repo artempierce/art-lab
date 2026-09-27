@@ -26,20 +26,20 @@ export function ApprovalCard({ approval, decision, busy, onRespond }: Props) {
   const disabled = busy || decision !== undefined
 
   return (
-    <div className="mt-3 border-t-2 border-ink pt-3">
-      <p className="display text-lg uppercase">Arty wants to {approval.tool}</p>
+    <div className="mt-3 rounded-lg border border-rule bg-bg p-3">
+      <p className="font-semibold">Arty wants to {approval.tool}</p>
       <p className="text-xs text-muted">Asked by {approval.agent}</p>
 
       <ArgsPreview tool={approval.tool} args={approval.args} />
 
       {approval.tainted && (
-        <p role="alert" className="mt-2 border-2 border-ink bg-[#fde2dc] px-2 py-1.5 text-xs font-medium text-danger">
+        <p role="alert" className="mt-2 rounded border border-danger/40 bg-danger/10 px-2 py-1.5 text-xs font-medium text-danger">
           ⚠ This chat read untrusted content ({approval.taint_sources.join(', ')}). Check the text before approving.
         </p>
       )}
 
       <div className="mt-3 flex gap-2">
-        <button type="button" disabled={disabled} onClick={() => onRespond(true)} className="btn-black px-4 py-1.5 text-sm">
+        <button type="button" disabled={disabled} onClick={() => onRespond(true)} className="btn-primary px-4 py-1.5 text-sm">
           Approve
         </button>
         <button
@@ -70,7 +70,7 @@ export function ApprovalCard({ approval, decision, busy, onRespond }: Props) {
 function ArgsPreview({ tool, args }: { tool: string; args: Record<string, unknown> }) {
   const text = tool === 'save_ideas' && typeof args.ideas === 'string' ? args.ideas : JSON.stringify(args, null, 2)
   return (
-    <pre className="mt-2 max-h-48 overflow-y-auto border-2 border-ink bg-sage p-2 font-mono text-xs whitespace-pre-wrap">
+    <pre className="mt-2 max-h-48 overflow-y-auto rounded border border-rule bg-surface p-2 font-mono text-xs whitespace-pre-wrap">
       {text}
     </pre>
   )
