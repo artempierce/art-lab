@@ -25,8 +25,8 @@ import type { Run } from '../App'
 import { RunBlock } from './TracePanel'
 
 // status → text colour, reusing the trace panel's own stage tokens (index.css) so the page doesn't
-// need any new colours: guard amber for the input guard's own refusal, Arty's navy for a paused
-// approval, the raspberry english_coach token for a breaker/cap stop, green for a clean finish, red
+// need any new colours: guard amber for the input guard's own refusal, Arty's blue for a paused
+// approval, the pink english_coach token for a breaker/cap stop, teal for a clean finish, red
 // for an error, and the skill teal for "redacted" (the output guard cleaned something up after the
 // fact — not a refusal, so it gets its own colour rather than red or amber).
 const STATUS_COLOR: Record<RunRow['status'], string> = {
@@ -52,7 +52,7 @@ function formatTime(startedAt: number): string {
 /** A small uppercase pill naming a run's status, coloured by STATUS_COLOR. */
 function StatusBadge({ status }: { status: RunRow['status'] }) {
   return (
-    <span className={`inline-block rounded border-2 border-current px-1.5 py-0.5 font-mono text-[11px] uppercase ${STATUS_COLOR[status]}`}>
+    <span className={`inline-block rounded border border-current px-1.5 py-0.5 font-mono text-[11px] uppercase ${STATUS_COLOR[status]}`}>
       {status}
     </span>
   )
@@ -60,7 +60,7 @@ function StatusBadge({ status }: { status: RunRow['status'] }) {
 
 /** A small error card, the same shape Sidebar.tsx uses for its own "couldn't load" state. */
 function ErrorCard({ message }: { message: string }) {
-  return <p className="card bg-[#fde2dc] p-3 text-sm font-medium text-danger">{message}</p>
+  return <p className="card border-danger/40 bg-danger/10 p-3 text-sm font-medium text-danger">{message}</p>
 }
 
 /**
@@ -94,7 +94,7 @@ function EvalSummaryCard({ summary, error }: { summary: EvalSummary | null | und
   return (
     <div className="card p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="display text-2xl uppercase">Latest eval run</p>
+        <p className="text-lg font-semibold">Latest eval run</p>
         <p className="text-xs text-muted">
           {summary.model} · {new Date(summary.started_at).toLocaleString()}
           {summary.dry_run && ' · dry run ($0)'}
@@ -133,7 +133,7 @@ function RunsTable({
   return (
     <div className="card overflow-x-auto p-0">
       <table className="w-full text-left text-sm">
-        <thead className="border-b-2 border-ink font-mono text-xs uppercase">
+        <thead className="border-b border-rule font-mono text-xs uppercase">
           <tr>
             <th className="px-3 py-2">Time</th>
             <th className="px-3 py-2">Prompt</th>
@@ -150,8 +150,8 @@ function RunsTable({
               key={row.trace_id}
               onClick={() => onSelect(row.trace_id)}
               aria-selected={row.trace_id === selectedId}
-              className={`cursor-pointer border-b border-shade last:border-0 hover:bg-sage ${
-                row.trace_id === selectedId ? 'bg-sage' : ''
+              className={`cursor-pointer border-b border-rule last:border-0 hover:bg-raised ${
+                row.trace_id === selectedId ? 'bg-raised' : ''
               }`}
             >
               <td className="px-3 py-2 whitespace-nowrap text-muted">{formatTime(row.started_at)}</td>
@@ -206,10 +206,10 @@ export function RunsPage() {
   }
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto p-6">
+    <div className="h-full min-h-0 overflow-y-auto bg-surface p-6">
       <div className="mx-auto flex max-w-4xl flex-col gap-5">
         <header>
-          <h1 className="display text-5xl uppercase">Runs</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Runs</h1>
           <p className="mt-1 text-sm text-muted">Every chat request, recorded — click a row to see its trace.</p>
         </header>
 

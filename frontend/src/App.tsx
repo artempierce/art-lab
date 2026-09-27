@@ -29,8 +29,7 @@ import {
   resumeChat,
   streamChat,
 } from './api'
-import type { ArtyMood } from './components/Arty'
-import { ChatView } from './components/ChatView'
+import { ChatView, type Mood } from './components/ChatView'
 import { MemoryPage } from './components/MemoryPage'
 import { RunsPage } from './components/RunsPage'
 import { Sidebar } from './components/Sidebar'
@@ -48,14 +47,14 @@ export type View = 'chat' | 'memory' | 'runs'
 export type Run = { traceId: string; prompt: string; lines: TraceLine[]; summary?: RunSummary; error?: string }
 
 /**
- * How Arty should look right now, read from the latest run's trace lines:
+ * What Arty is doing right now (the chat header's status line), read from the latest run's trace lines:
  *   no runs yet                         → idle
  *   streaming, just routed to rag_agent → searching (the knowledge-base search is running)
  *   streaming, anything else            → thinking
  *   finished, the guard blocked it      → blocked
  *   finished with an answer             → happy
  */
-function artyMood(runs: Run[], busy: boolean): ArtyMood {
+function artyMood(runs: Run[], busy: boolean): Mood {
   const run = runs[runs.length - 1]
   if (!run) return 'idle'
   if (busy) {

@@ -5,7 +5,7 @@
  * this page only lets you fix a wrong one or make Arty forget it.
  *
  * Fetches its own data on mount (the same pattern TeamList.tsx uses): nothing else on the page needs
- * the fact list. Style: the sage page with white cards, black/outline buttons (see index.css);
+ * the fact list. Style: cards and primary/outline buttons from index.css;
  * the delete confirm step follows ApprovalCard.tsx's "ask before a one-way action" shape.
  */
 import { useCallback, useEffect, useState } from 'react'
@@ -36,8 +36,8 @@ export function MemoryPage() {
   useEffect(load, [load])
 
   return (
-    <main className="min-h-0 overflow-y-auto bg-sage p-6">
-      <h1 className="display text-3xl uppercase">Memory</h1>
+    <main className="min-h-0 overflow-y-auto bg-surface p-6">
+      <h1 className="text-2xl font-bold tracking-tight">Memory</h1>
       <p className="mt-1 max-w-2xl text-sm text-muted">
         Facts Arty has picked up from your own messages — never from a tool result, a document, or anything else it
         read (that's the safety rule behind long-term memory). Fix one if it's wrong, or delete it to make Arty
@@ -46,7 +46,7 @@ export function MemoryPage() {
 
       <div className="mt-6 flex max-w-2xl flex-col gap-3">
         {loadError && (
-          <p role="alert" className="card bg-[#fde2dc] p-3 text-sm font-medium text-danger">
+          <p role="alert" className="card border-danger/40 bg-danger/10 p-3 text-sm font-medium text-danger">
             {loadError}
           </p>
         )}
@@ -137,7 +137,7 @@ function FactCard({ fact, onChanged }: { fact: Fact; onChanged: () => void }) {
             onChange={(e) => setDraft(e.target.value)}
             disabled={busy}
             autoFocus
-            className="w-full border-2 border-ink bg-paper px-2 py-1.5 text-sm outline-none"
+            className="w-full rounded border border-rule bg-raised focus:border-accent px-2 py-1.5 text-sm outline-none"
           />
         </div>
       ) : (
@@ -151,7 +151,7 @@ function FactCard({ fact, onChanged }: { fact: Fact; onChanged: () => void }) {
       )}
 
       {mode === 'confirm-delete' && (
-        <p role="alert" className="mt-3 border-2 border-ink bg-[#fde2dc] px-3 py-2 text-xs font-medium text-danger">
+        <p role="alert" className="mt-3 rounded border border-danger/40 bg-danger/10 px-3 py-2 text-xs font-medium text-danger">
           Delete this fact? This can't be undone.
         </p>
       )}
@@ -159,7 +159,7 @@ function FactCard({ fact, onChanged }: { fact: Fact; onChanged: () => void }) {
       <div className="mt-3 flex gap-2">
         {mode === 'edit' && (
           <>
-            <button type="button" onClick={save} disabled={busy || !draft.trim()} className="btn-black px-3 py-1 text-sm">
+            <button type="button" onClick={save} disabled={busy || !draft.trim()} className="btn-primary px-3 py-1 text-sm">
               Save
             </button>
             <button type="button" onClick={() => setMode('view')} disabled={busy} className="btn-outline px-3 py-1 text-sm">
@@ -169,7 +169,7 @@ function FactCard({ fact, onChanged }: { fact: Fact; onChanged: () => void }) {
         )}
         {mode === 'confirm-delete' && (
           <>
-            <button type="button" onClick={confirmDelete} disabled={busy} className="btn-black px-3 py-1 text-sm">
+            <button type="button" onClick={confirmDelete} disabled={busy} className="btn-primary px-3 py-1 text-sm">
               Yes, delete
             </button>
             <button type="button" onClick={() => setMode('view')} disabled={busy} className="btn-outline px-3 py-1 text-sm">

@@ -4,9 +4,9 @@ A small multi-agent **web app** built to learn how production AI agents work —
 tools, knowledge bases (RAG), human approval, memory, skills and evals — where **every step runs for
 real and shows itself** in a live trace panel next to the chat.
 
-The main agent is **Arty**, an "interface friend": a little retro computer whose screen shows his face,
-wearing a red beret and carrying a paintbrush. His face shows what the backend is doing: thinking,
-searching the knowledge base, blocked, or happy (with a wink).
+The main agent is **Arty**. The UI is dark and minimal: a chat list, the chat, and a terminal-style
+trace panel, with a status line in the chat header saying what Arty is doing (thinking, searching the
+knowledge base, blocked, done).
 
 > **The idea:** agent architecture is easy to read about and hard to *see*. Diagrams show boxes; they
 > don't show a guard blocking a message, a supervisor picking an agent, or a search pulling the right
@@ -45,7 +45,7 @@ searching the knowledge base, blocked, or happy (with a wink).
 | `evals/` | Golden question sets and reports: routing, rag, youtube_researcher, content_ideator, english_coach |
 | `backend/tests/` | 256 tests on the fake model and local embeddings — no API calls, $0 |
 | `frontend/src/` | React app: chat list (× deletes a chat and all its data via DELETE `/api/threads/{id}`), chat (with Sources), live trace panel |
-| `frontend/src/components/Arty.tsx` | Arty, drawn as an SVG with five moods (idle, thinking, searching, happy, blocked) |
+| `frontend/src/index.css` | The dark theme: colour tokens named by purpose (`bg`, `surface`, `ink`, `accent`, trace stage colours), `.card` and button classes |
 | `frontend/src/components/ApprovalCard.tsx` | Phase 6: Approve / Reject card for mutating tools; shows taint warning and what the tool will do |
 | `frontend/src/components/TeamList.tsx` | Phase 5 sidebar section listing available workers (team agents) |
 | `frontend/src/components/MemoryPage.tsx` | Phase 12: list, edit and delete facts from long-term memory; GET/PUT/DELETE `/api/memory` |

@@ -28,9 +28,9 @@ export function TeamList() {
   if (failed || agents.length === 0) return null // backend not reachable yet, or still loading
 
   return (
-    <details className="border-t-2 border-ink pt-4">
-      <summary className="cursor-pointer text-xs font-medium">Team</summary>
-      <ul className="mt-2 space-y-2">
+    <details className="border-t border-rule pt-3">
+      <summary className="cursor-pointer px-1 text-xs font-medium tracking-wider text-muted uppercase hover:text-ink">Team</summary>
+      <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto">
         {agents.map((agent) => (
           <li key={agent.name} className="card p-2">
             <p className="text-sm font-semibold">{agent.name}</p>

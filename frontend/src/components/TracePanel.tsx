@@ -2,7 +2,7 @@
  * TracePanel.tsx — the right pane: a log of what the backend did for each message.
  * This is where the app's "visible" goal lives.
  *
- * One white card per message you sent (a Run), each with:
+ * A terminal-dark column with one box per message you sent (a Run), each with:
  *   › your message (shortened)                         trace ID (click to copy, find it in LangSmith)
  *   ✓ guard        pass · 44 chars · budget 0.4% used                                             1ms
  *   ✓ arty         → rag_agent · question about studio policy                                   620ms
@@ -17,9 +17,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Run } from '../App'
 
-// Stage name → text colour: guard amber, Arty navy, rag_agent red, tools green (dark enough for white
-// cards). The Phase 5 workers get their own darker tokens (index.css, all ≥ 6:1 on white, the WCAG
-// AA text minimum is 4.5:1): youtube_researcher blue, content_ideator purple, english_coach raspberry.
+// Stage name → text colour (light pastels from index.css, readable on the terminal background): guard
+// amber, Arty blue, rag_agent peach, tools teal, youtube_researcher sky, content_ideator lilac,
+// english_coach pink.
 const STAGE_COLOR: Record<string, string> = {
   guard: 'text-t-guard',
   arty: 'text-t-agent',
@@ -53,14 +53,13 @@ export function TracePanel({ runs, busy }: { runs: Run[]; busy: boolean }) {
 
   return (
     // Hidden below 1024px wide (lg).
-    <aside aria-label="Trace" className="hidden min-h-0 flex-col border-l-2 border-ink bg-sage font-mono text-[12.5px] lg:flex">
-      <header className="border-b-2 border-ink px-5 py-3">
-        <h2 className="display text-4xl uppercase">Trace</h2>
-        <p className="mt-1 font-sans text-xs">Every step Arty takes, live</p>
+    <aside aria-label="Trace" className="hidden min-h-0 flex-col border-l border-rule bg-term font-mono text-[12.5px] text-term-ink lg:flex">
+      <header className="border-b border-term-rule px-4 py-3.5 text-xs tracking-widest text-term-dim uppercase">
+        Trace
       </header>
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {runs.length === 0 && (
-          <p className="font-sans text-sm leading-relaxed">
+          <p className="leading-relaxed text-term-dim">
             Send a message and each step shows up here: the guard, Arty's decision, the knowledge-base search, the
             answer — with tokens, cost and time.
           </p>
@@ -82,31 +81,42 @@ export function TracePanel({ runs, busy }: { runs: Run[]; busy: boolean }) {
  */
 export function RunBlock({ run, running }: { run: Run; running: boolean }) {
   return (
-    <section className="card p-3">
-      <div className="mb-2 flex items-baseline justify-between gap-3 text-muted">
+    // Its own terminal-dark box (not a `card`), so a replayed run on the Runs page looks exactly like
+    // it did live in the trace panel.
+    // `@container` makes this box a *container* for container queries: the `@lg:` classes below
+    // react to the box's own width (≥ 32rem), not the window's — so the same card lays itself out
+    // differently in the narrow trace panel and on the wide Runs page.
+    <section className="@container rounded-lg border border-term-rule bg-term p-3 font-mono text-[12.5px] text-term-ink">
+      <div className="mb-2 flex items-baseline justify-between gap-3 text-term-dim">
         <span className="truncate">› {run.prompt}</span>
         {run.traceId && <CopyId id={run.traceId} />}
       </div>
-      <ul className="space-y-1">
+      <ul className="space-y-1.5 @lg:space-y-1">
         {run.lines.map((line, i) => {
           // Anything other than "ok" (blocked, error) is shown in the warning colour.
           const failed = line.status !== 'ok'
-          const color = failed ? 'text-t-human' : (STAGE_COLOR[line.stage] ?? 'text-ink')
+          const color = failed ? 'text-t-human' : (STAGE_COLOR[line.stage] ?? 'text-term-ink')
           return (
-            // Four columns: icon | stage (11em fits the longest name, "youtube_researcher", in mono) | detail (wraps) | time
-            <li key={i} className="grid grid-cols-[1.4em_11em_minmax(0,1fr)_auto] gap-x-2">
+            // Narrow box (the trace panel): two rows, so the detail gets the full width.
+            //   icon | stage          | time
+            //        | detail (spans stage + time columns)
+            // Wide box (the Runs page, @lg): one row of four columns.
+            //   icon | stage (11em fits "youtube_researcher") | detail | time
+            <li key={i} className="grid grid-cols-[1.4em_minmax(0,1fr)_auto] gap-x-2 @lg:grid-cols-[1.4em_11em_minmax(0,1fr)_auto]">
               <span className={color}>{STATUS_ICON[line.status] ?? '•'}</span>
               <span className={`font-medium ${color}`}>{line.stage}</span>
-              <span className="break-words">{line.detail}</span>
-              <span className="text-muted tabular-nums">{line.ms}ms</span>
+              <span className="col-span-2 col-start-2 row-start-2 break-words @lg:col-span-1 @lg:col-start-3 @lg:row-start-1">
+                {line.detail}
+              </span>
+              <span className="col-start-3 row-start-1 text-right text-term-dim tabular-nums @lg:col-start-4">{line.ms}ms</span>
             </li>
           )
         })}
-        {running && !run.summary && !run.error && <li className="animate-pulse text-muted">… running</li>}
+        {running && !run.summary && !run.error && <li className="animate-pulse text-term-dim">… running</li>}
         {run.error && <li className="break-words text-t-human">✕ {run.error}</li>}
       </ul>
       {run.summary && (
-        <div className="mt-2 border-t-2 border-dashed border-shade pt-2 text-muted tabular-nums">
+        <div className="mt-2 border-t border-dashed border-term-rule pt-2 text-term-dim tabular-nums">
           {formatTokens(run.summary.input_tokens + run.summary.output_tokens)} tok · ${run.summary.cost_usd.toFixed(4)} ·{' '}
           {(run.summary.ms / 1000).toFixed(1)}s
         </div>
@@ -131,7 +141,7 @@ function CopyId({ id }: { id: string }) {
           setTimeout(() => setCopied(false), 1500)
         })
       }
-      className="shrink-0 px-1 text-muted hover:text-ink focus-visible:outline-1 focus-visible:outline-ink"
+      className="shrink-0 px-1 text-term-dim hover:text-term-ink focus-visible:outline-1 focus-visible:outline-accent"
     >
       {copied ? 'copied' : id.slice(0, 8)}
     </button>
